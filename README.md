@@ -1,3 +1,4 @@
+This is just the current UI, it may change in the future, this is just a test UI.
 # Discord-wear
 Discord For WearOS
 ### 3RD PARTY CLIENTS VIOLATE DISCORDS TERMS OF SERVICE
