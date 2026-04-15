@@ -70,7 +70,7 @@ class DiscordGateway(private val token: String) {
     // ── Connect / Disconnect ──────────────────────────────────────────────────
 
     fun connect() {
-        val url = resumeUrl ?: "wss://gateway.discord.gg/?v=10&encoding=json"
+        val url = resumeUrl ?: "wss://gateway.discord.gg/?v=10&encoding=json" //,gg? 
         val request = Request.Builder().url(url).build()
         ws = http.newWebSocket(request, Listener())
     }
@@ -78,7 +78,7 @@ class DiscordGateway(private val token: String) {
     fun disconnect() {
         connected = false
         heartbeatJob?.cancel()
-        ws?.close(1000, "Goodbye")
+        ws?.close(1000, "Goodbye") //uh
         ws = null
     }
 
@@ -102,7 +102,7 @@ class DiscordGateway(private val token: String) {
             .put("intents", INTENTS)
             .put("properties", JSONObject()
                 .put("\$os", "android")
-                .put("\$browser", "discord_wear")
+                .put("\$browser", "discord_wear")//device identifier?
                 .put("\$device", "wearos"))
         send(Op.IDENTIFY, d)
     }
