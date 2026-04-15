@@ -66,8 +66,9 @@ fun ServerChannels(
                                 Text(
                                     text  = "▸ ${group.category.name.uppercase()}",
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight    = FontWeight.Bold,
-                                        fontSize      = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center,
+                                        fontSize = 10.sp,
                                         letterSpacing = 1.sp
                                     ),
                                     color    = MaterialTheme.colorScheme.onSurfaceVariant,
