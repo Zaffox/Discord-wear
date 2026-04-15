@@ -1,3 +1,4 @@
+//need to sort by Channel categoies
 package com.zaffox.discordwear.screens
 
 import androidx.compose.foundation.layout.*
