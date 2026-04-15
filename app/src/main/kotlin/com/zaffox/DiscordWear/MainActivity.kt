@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
                     composable("home") {
                         HomeScreen(
                             onNavigateToDms     = { navController.navigate("DMs") },
+                            onNavigateToSettings     = { navController.navigate("settings") },
                             onNavigateToServers = { navController.navigate("servers") },
                             onNavigateToWelcome = { navController.navigate("Welcome") },
                             onNavigateToChat    = { chId, chName ->
@@ -62,6 +63,9 @@ class MainActivity : ComponentActivity() {
                                 navController.navigate("chatscreen/$chId/$chName")
                             }
                         )
+                    }
+                    composable("Settings") {
+                        SettingsScreen()
                     }
                     composable("DMs") {
                         DmsScreen(onNavigateToChatScreen = { chId, chName ->
