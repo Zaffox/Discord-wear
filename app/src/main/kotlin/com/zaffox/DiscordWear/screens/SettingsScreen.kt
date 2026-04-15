@@ -17,7 +17,7 @@ import androidx.wear.input.RemoteInputIntentHelper
 import androidx.wear.input.wearableExtender
 
 @Composable
-fun SettingScreen() {
+fun SettingsScreen() {
     val context   = LocalContext.current
     val listState = rememberScalingLazyListState()
 
