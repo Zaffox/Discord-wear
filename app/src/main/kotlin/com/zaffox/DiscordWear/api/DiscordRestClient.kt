@@ -40,7 +40,7 @@ class DiscordRestClient(private val token: String) {
         Request.Builder()
             .url("$baseUrl$path")
             .header("Authorization", token)           // token already has "Bot " prefix if bot
-            .header("User-Agent", "DiscordWear/1.0 (WearOS)")
+            .header("User-Agent", "DiscordWear/1.0 (WearOS)")//add device model?
 
     /** Execute a request and return the body as a string, or throw on HTTP error. */
     private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
