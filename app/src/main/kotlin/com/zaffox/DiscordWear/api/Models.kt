@@ -15,7 +15,7 @@ data class DiscordUser(
     val displayName: String get() = globalName ?: username
     fun avatarUrl(size: Int = 64): String =
         if (avatarHash != null)
-            "https://cdn.discordapp.com/avatars/$id/$avatarHash.png?size=$size"//PFP not showing
+            "https://cdn.discordapp.com/avatars/$id/$avatarHash.png?size=$size"
         else
             "https://cdn.discordapp.com/embed/avatars/${(id.toLongOrNull() ?: 0L) % 5}.png"
 
@@ -39,7 +39,7 @@ data class Guild(
 ) {
     fun iconUrl(size: Int = 64): String =
         if (iconHash != null)
-            "https://cdn.discordapp.com/icons/$id/$iconHash.png?size=$size"//set button to have icon
+            "https://cdn.discordapp.com/icons/$id/$iconHash.png?size=$size"
         else
             "https://cdn.discordapp.com/embed/avatars/0.png"
 
@@ -258,6 +258,131 @@ data class CategoryGroup(
     val channels: List<Channel>
 )
 
+// ── Attachment ────────────────────────────────────────────────────────────────
+
+data class Attachment(
+    val id: String,
+    val filename: String,
+    val url: String,
+    val proxyUrl: String,
+    val width: Int?,
+    val height: Int?,
+    val contentType: String?
+) {
+    val isImage: Boolean get() =
+        contentType?.startsWith("image/") == true ||
+        filename.substringAfterLast('.').lowercase() in setOf("png","jpg","jpeg","gif","webp")
+
+    companion object {
+        fun fromJson(o: JSONObject) = Attachment(
+            id          = o.getString("id"),
+            filename    = o.getString("filename"),
+            url         = o.getString("url"),
+            proxyUrl    = o.optString("proxy_url").ifEmpty { o.getString("url") },
+            width       = o.optInt("width").takeIf { it > 0 },
+            height      = o.optInt("height").takeIf { it > 0 },
+            contentType = o.optString("content_type").takeIf { it.isNotEmpty() }
+        )
+    }
+}
+
+// ── Embed ─────────────────────────────────────────────────────────────────────
+
+data class EmbedImage(val url: String, val proxyUrl: String?)
+
+data class Embed(
+    val title: String?,
+    val description: String?,
+    val url: String?,
+    val image: EmbedImage?,
+    val thumbnail: EmbedImage?,
+    val type: String?          // "image", "gifv", "rich", "video", …
+) {
+    /** URL to show as the primary visual for this embed */
+    val displayImageUrl: String? get() =
+        (image?.proxyUrl ?: image?.url)
+            ?: (thumbnail?.proxyUrl ?: thumbnail?.url)
+
+    companion object {
+        fun fromJson(o: JSONObject): Embed {
+            fun parseImg(key: String): EmbedImage? {
+                val img = o.optJSONObject(key) ?: return null
+                val u = img.optString("url").takeIf { it.isNotEmpty() } ?: return null
+                return EmbedImage(u, img.optString("proxy_url").takeIf { it.isNotEmpty() })
+            }
+            return Embed(
+                title       = o.optString("title").takeIf { it.isNotEmpty() },
+                description = o.optString("description").takeIf { it.isNotEmpty() },
+                url         = o.optString("url").takeIf { it.isNotEmpty() },
+                image       = parseImg("image"),
+                thumbnail   = parseImg("thumbnail"),
+                type        = o.optString("type").takeIf { it.isNotEmpty() }
+            )
+        }
+    }
+}
+
+// ── Sticker ───────────────────────────────────────────────────────────────────
+
+data class StickerItem(
+    val id: String,
+    val name: String,
+    /** 1 = PNG, 2 = APNG, 3 = LOTTIE, 4 = GIF */
+    val formatType: Int
+) {
+    /** CDN URL — Lottie stickers use a JSON url, everything else is an image */
+    val imageUrl: String get() = when (formatType) {
+        3    -> "https://discord.com/stickers/$id.json"   // Lottie — can't display natively
+        4    -> "https://media.discordapp.net/stickers/$id.gif"
+        else -> "https://media.discordapp.net/stickers/$id.png"
+    }
+    val isDisplayable: Boolean get() = formatType != 3  // skip Lottie
+
+    companion object {
+        fun fromJson(o: JSONObject) = StickerItem(
+            id         = o.getString("id"),
+            name       = o.getString("name"),
+            formatType = o.optInt("format_type", 1)
+        )
+    }
+}
+
+// ── Custom emoji helper ───────────────────────────────────────────────────────
+
+/**
+ * Parses Discord custom emoji syntax from message content.
+ *   Static:   <:name:id>    → https://cdn.discordapp.com/emojis/{id}.png
+ *   Animated: <a:name:id>   → https://cdn.discordapp.com/emojis/{id}.gif
+ */
+object EmojiParser {
+    private val CUSTOM_EMOJI_RE = Regex("<(a?):(\\w+):(\\d+)>")
+
+    data class ParsedPart(
+        val text: String?,          // non-null for plain text segments
+        val emojiUrl: String?,      // non-null for custom emoji
+        val emojiName: String?      // e.g. "pepe"
+    )
+
+    fun parse(content: String): List<ParsedPart> {
+        if (!content.contains('<')) return listOf(ParsedPart(content, null, null))
+        val parts = mutableListOf<ParsedPart>()
+        var last = 0
+        for (match in CUSTOM_EMOJI_RE.findAll(content)) {
+            if (match.range.first > last) {
+                parts += ParsedPart(content.substring(last, match.range.first), null, null)
+            }
+            val animated = match.groupValues[1] == "a"
+            val name = match.groupValues[2]
+            val id   = match.groupValues[3]
+            val ext  = if (animated) "gif" else "webp"
+            parts += ParsedPart(null, "https://cdn.discordapp.com/emojis/$id.$ext?size=32", name)
+            last = match.range.last + 1
+        }
+        if (last < content.length) parts += ParsedPart(content.substring(last), null, null)
+        return parts
+    }
+}
+
 // ── Message ───────────────────────────────────────────────────────────────────
 
 data class DiscordMessage(
@@ -267,6 +392,9 @@ data class DiscordMessage(
     val content: String,
     val timestamp: String,
     val editedTimestamp: String?,
+    val attachments: List<Attachment> = emptyList(),
+    val embeds: List<Embed> = emptyList(),
+    val stickers: List<StickerItem> = emptyList(),
     /** Users mentioned in this message */
     val mentionedUserIds: List<String> = emptyList(),
     /** Role IDs mentioned */
@@ -294,6 +422,21 @@ data class DiscordMessage(
                 (0 until roleArr.length()).map { roleArr.getString(it) }
             else emptyList()
 
+            val attachArr = o.optJSONArray("attachments")
+            val attachments = if (attachArr != null)
+                (0 until attachArr.length()).map { Attachment.fromJson(attachArr.getJSONObject(it)) }
+            else emptyList()
+
+            val embedArr = o.optJSONArray("embeds")
+            val embeds = if (embedArr != null)
+                (0 until embedArr.length()).map { Embed.fromJson(embedArr.getJSONObject(it)) }
+            else emptyList()
+
+            val stickerArr = o.optJSONArray("sticker_items")
+            val stickers = if (stickerArr != null)
+                (0 until stickerArr.length()).map { StickerItem.fromJson(stickerArr.getJSONObject(it)) }
+            else emptyList()
+
             return DiscordMessage(
                 id               = o.getString("id"),
                 channelId        = o.getString("channel_id"),
@@ -301,6 +444,9 @@ data class DiscordMessage(
                 content          = o.getString("content"),
                 timestamp        = o.getString("timestamp"),
                 editedTimestamp  = o.optString("edited_timestamp").takeIf { it.isNotEmpty() },
+                attachments      = attachments,
+                embeds           = embeds,
+                stickers         = stickers,
                 mentionedUserIds = mentionedUsers,
                 mentionedRoleIds = mentionedRoles,
                 mentionEveryone  = o.optBoolean("mention_everyone", false),

@@ -23,6 +23,12 @@ class DiscordRepository(token: String) {
     private val _currentUser = MutableStateFlow<DiscordUser?>(null)
     val currentUser: StateFlow<DiscordUser?> = _currentUser.asStateFlow()
 
+    /**
+     * Cached current-user ID — set immediately on READY so ping detection
+     * works even before the StateFlow is observed.
+     */
+    @Volatile private var currentUserId: String? = null
+
     private val _guilds = MutableStateFlow<List<Guild>>(emptyList())
     val guilds: StateFlow<List<Guild>> = _guilds.asStateFlow()
 
@@ -74,7 +80,10 @@ class DiscordRepository(token: String) {
     // ── Refresh helpers ───────────────────────────────────────────────────────
 
     suspend fun refreshCurrentUser() {
-        rest.getCurrentUser().onSuccess { _currentUser.value = it }
+        rest.getCurrentUser().onSuccess {
+            _currentUser.value = it
+            currentUserId = it.id   // seed early so pings work immediately
+        }
     }
 
     suspend fun refreshGuilds() {
@@ -120,7 +129,10 @@ class DiscordRepository(token: String) {
         scope.launch {
             gateway.events.collect { event ->
                 when (event) {
-                    is GatewayEvent.Ready -> _currentUser.value = event.user
+                    is GatewayEvent.Ready -> {
+                        _currentUser.value = event.user
+                        currentUserId = event.user.id
+                    }
 
                     is GatewayEvent.MessageCreate -> {
                         val msg = event.message
@@ -136,19 +148,14 @@ class DiscordRepository(token: String) {
                         msg.guildId?.let { channelGuildCache[msg.channelId] = it }
 
                         // Check if this is a ping for the current user
-                        val me = _currentUser.value
-                        if (me != null && msg.author.id != me.id && msg.pingFor(me.id)) {
+                        val myId = currentUserId
+                        if (myId != null && msg.author.id != myId && msg.pingFor(myId)) {
                             val channelName = channelNameCache[msg.channelId] ?: msg.channelId
                             val guildName   = msg.guildId?.let { gid ->
                                 _guilds.value.firstOrNull { it.id == gid }?.name
                             }
-                            val ping = Ping(
-                                message     = msg,
-                                channelName = channelName,
-                                guildName   = guildName
-                            )
                             _pings.update { current ->
-                                (listOf(ping) + current).take(5)
+                                (listOf(Ping(msg, channelName, guildName)) + current).take(5)
                             }
                         }
 
