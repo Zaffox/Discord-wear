@@ -39,8 +39,8 @@ class DiscordRestClient(private val token: String) {
     private fun buildRequest(path: String): Request.Builder =
         Request.Builder()
             .url("$baseUrl$path")
-            .header("Authorization", token)           // token already has "Bot " prefix if bot - Check for bot maybe?
-            .header("User-Agent", "DiscordWear/1.0 (WearOS)")//Add device info here, EX: Galaxy Watch7 40MM - help ID device
+            .header("Authorization", token)           // token already has "Bot " prefix if bot
+            .header("User-Agent", "DiscordWear/1.0 (WearOS)")
 
     /** Execute a request and return the body as a string, or throw on HTTP error. */
     private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
@@ -73,11 +73,61 @@ class DiscordRestClient(private val token: String) {
         Guild.listFromJson(JSONArray(get("/users/@me/guilds?limit=200")))
     }
 
-    /** GET /guilds/{guildId}/channels */
-    suspend fun getGuildChannels(guildId: String): Result<List<Channel>> = runCatching {
-        Channel.listFromJson(JSONArray(get("/guilds/$guildId/channels")))
-            .filter { it.isText }
-            .sortedBy { it.name }
+    /** GET /guilds/{guildId}/members/@me — current user's member object */
+    suspend fun getGuildMember(guildId: String): Result<GuildMember> = runCatching {
+        GuildMember.fromJson(JSONObject(get("/guilds/$guildId/members/@me")))
+    }
+
+    /** GET /guilds/{guildId} — includes roles array */
+    suspend fun getGuildRoles(guildId: String): Result<List<GuildRole>> = runCatching {
+        val guild = JSONObject(get("/guilds/$guildId"))
+        GuildRole.listFromJson(guild.getJSONArray("roles"))
+    }
+
+    /**
+     * GET /guilds/{guildId}/channels — returns channels grouped into
+     * [CategoryGroup]s, filtered to only those the current user can see,
+     * sorted by Discord position within each group.
+     */
+    suspend fun getGuildChannels(guildId: String): Result<List<CategoryGroup>> = runCatching {
+        val raw = Channel.listFromJson(JSONArray(get("/guilds/$guildId/channels")))
+
+        // Fetch member + roles for permission filtering
+        val member = getGuildMember(guildId).getOrNull()
+        val roles  = getGuildRoles(guildId).getOrNull()
+
+        fun canView(channel: Channel): Boolean {
+            if (member == null || roles == null) return true
+            val perms = Permissions.effectiveForMember(
+                member         = member,
+                guildId        = guildId,
+                everyoneRoleId = guildId,
+                roles          = roles,
+                channel        = channel
+            )
+            return Permissions.has(perms, Permissions.VIEW_CHANNEL)
+        }
+
+        val categories  = raw.filter { it.isCategory }.sortedBy { it.position }
+        val textChannels = raw.filter { it.isText && canView(it) }
+
+        // Map category ID → sorted text channels
+        val byParent = textChannels.groupBy { it.parentId }
+
+        // Build ordered groups: categories that have at least one visible channel
+        val groups = mutableListOf<CategoryGroup>()
+
+        // Top-level channels (no parent category)
+        val topLevel = byParent[null].orEmpty().sortedBy { it.position }
+        if (topLevel.isNotEmpty()) groups.add(CategoryGroup(category = null, channels = topLevel))
+
+        // Category groups
+        for (cat in categories) {
+            val children = byParent[cat.id].orEmpty().sortedBy { it.position }
+            if (children.isNotEmpty()) groups.add(CategoryGroup(category = cat, channels = children))
+        }
+
+        groups
     }
 
     /** GET /users/@me/channels — DM channels */
@@ -91,7 +141,6 @@ class DiscordRestClient(private val token: String) {
      * Returns up to [limit] messages (max 100), newest first.
      * The UI should reverse the list to show oldest-at-top.
      */
-     //lets try to get the unread messages and start from there unless mor than ~20, but add quick scroll down- not here, in UI screen kotlin
     suspend fun getMessages(channelId: String, limit: Int = 50): Result<List<DiscordMessage>> = runCatching {
         val safe = limit.coerceIn(1, 100)
         DiscordMessage.listFromJson(JSONArray(get("/channels/$channelId/messages?limit=$safe")))

@@ -10,20 +10,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * DiscordRepository is the single source of truth for the app.
- *
- * It owns:
- *  - [DiscordRestClient] for REST calls
- *  - [DiscordGateway]    for real-time events
- *  - [StateFlow]s that the ViewModels/screens observe
- *
- * Lifecycle: create once (e.g. in Application or a singleton), call [connect]
- * after a token is available, [disconnect] on logout.
+ * Single source of truth — owns REST client + Gateway, exposes StateFlows.
  */
 class DiscordRepository(token: String) {
 
-    private val scope  = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    val rest           = DiscordRestClient(token)
+    private val scope   = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val rest            = DiscordRestClient(token)
     private val gateway = DiscordGateway(token)
 
     // ── Exposed state ─────────────────────────────────────────────────────────
@@ -37,13 +29,33 @@ class DiscordRepository(token: String) {
     private val _dmChannels = MutableStateFlow<List<Channel>>(emptyList())
     val dmChannels: StateFlow<List<Channel>> = _dmChannels.asStateFlow()
 
-    /** channelId → messages (newest-last order) */
+    /** channelId → messages (oldest-first) */
     private val _messages = MutableStateFlow<Map<String, List<DiscordMessage>>>(emptyMap())
     val messages: StateFlow<Map<String, List<DiscordMessage>>> = _messages.asStateFlow()
 
     /** channelId → set of userIds currently typing */
     private val _typing = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
     val typing: StateFlow<Map<String, Set<String>>> = _typing.asStateFlow()
+
+    /**
+     * Up to 5 most-recent pings (messages that mention the current user,
+     * @everyone, or @here). Newest first.
+     */
+    private val _pings = MutableStateFlow<List<Ping>>(emptyList())
+    val pings: StateFlow<List<Ping>> = _pings.asStateFlow()
+
+    /**
+     * Lightweight channel name cache populated from Gateway events so that
+     * pings can show a channel name without extra REST calls.
+     * channelId → channelName
+     */
+    private val channelNameCache = mutableMapOf<String, String>()
+
+    /**
+     * Guild ID cache from message events: channelId → guildId
+     * (the gateway MESSAGE_CREATE payload includes guild_id)
+     */
+    private val channelGuildCache = mutableMapOf<String, String>()
 
     val gatewayEvents = gateway.events
 
@@ -57,14 +69,12 @@ class DiscordRepository(token: String) {
         scope.launch { refreshDmChannels() }
     }
 
-    fun disconnect() {
-        gateway.disconnect()
-    }
+    fun disconnect() = gateway.disconnect()
 
     // ── Refresh helpers ───────────────────────────────────────────────────────
 
     suspend fun refreshCurrentUser() {
-        rest.getCurrentUser().onSuccess { _currentUser.value = it } // if 401 then check token
+        rest.getCurrentUser().onSuccess { _currentUser.value = it }
     }
 
     suspend fun refreshGuilds() {
@@ -72,25 +82,31 @@ class DiscordRepository(token: String) {
     }
 
     suspend fun refreshDmChannels() {
-        rest.getDmChannels().onSuccess { _dmChannels.value = it }
-    }
-
-    /** Fetch messages for a channel and cache them. */
-    suspend fun loadMessages(channelId: String) {//if 401, probably staff only channel, ill keep that, but probably hidden in a dev menu lol
-        rest.getMessages(channelId).onSuccess { newMsgs ->
-            _messages.update { current ->
-                current + (channelId to newMsgs.reversed()) // reversed = oldest first
-            }
+        rest.getDmChannels().onSuccess { list ->
+            _dmChannels.value = list
+            // Seed the name cache from DM recipients
+            list.forEach { ch -> channelNameCache[ch.id] = ch.displayName }
         }
     }
 
-    /** Send a message, optimistically append it, then reconcile from response. */
+    /** Seed channel name cache when the user opens a server's channel list. */
+    fun cacheChannelNames(groups: List<CategoryGroup>) {
+        groups.forEach { g -> g.channels.forEach { ch -> channelNameCache[ch.id] = ch.name } }
+    }
+
+    /** Fetch messages for a channel and cache them. */
+    suspend fun loadMessages(channelId: String) {
+        rest.getMessages(channelId).onSuccess { msgs ->
+            _messages.update { it + (channelId to msgs.reversed()) }
+        }
+    }
+
+    /** Send a message. */
     suspend fun sendMessage(channelId: String, content: String): Result<DiscordMessage> {
         val result = rest.sendMessage(channelId, content)
         result.onSuccess { msg ->
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
-                // avoid duplicate if Gateway already pushed it
                 if (list.none { it.id == msg.id }) list.add(msg)
                 current + (channelId to list)
             }
@@ -104,18 +120,39 @@ class DiscordRepository(token: String) {
         scope.launch {
             gateway.events.collect { event ->
                 when (event) {
-                    is GatewayEvent.Ready -> {
-                        _currentUser.value = event.user
-                    }
+                    is GatewayEvent.Ready -> _currentUser.value = event.user
 
                     is GatewayEvent.MessageCreate -> {
                         val msg = event.message
+
+                        // Update message cache for open channels
                         _messages.update { current ->
-                            val list = current[msg.channelId].orEmpty().toMutableList()
+                            val list = current[msg.channelId]?.toMutableList() ?: return@update current
                             if (list.none { it.id == msg.id }) list.add(msg)
                             current + (msg.channelId to list)
                         }
-                        // Clear typing indicator for that user
+
+                        // Cache guild association from the payload
+                        msg.guildId?.let { channelGuildCache[msg.channelId] = it }
+
+                        // Check if this is a ping for the current user
+                        val me = _currentUser.value
+                        if (me != null && msg.author.id != me.id && msg.pingFor(me.id)) {
+                            val channelName = channelNameCache[msg.channelId] ?: msg.channelId
+                            val guildName   = msg.guildId?.let { gid ->
+                                _guilds.value.firstOrNull { it.id == gid }?.name
+                            }
+                            val ping = Ping(
+                                message     = msg,
+                                channelName = channelName,
+                                guildName   = guildName
+                            )
+                            _pings.update { current ->
+                                (listOf(ping) + current).take(5)
+                            }
+                        }
+
+                        // Clear typing indicator for this user
                         _typing.update { current ->
                             val users = current[msg.channelId].orEmpty() - msg.author.id
                             if (users.isEmpty()) current - msg.channelId
@@ -148,7 +185,7 @@ class DiscordRepository(token: String) {
                         }
                     }
 
-                    is GatewayEvent.Unknown -> { /* ignore unknown events */ }
+                    is GatewayEvent.Unknown -> {}
                 }
             }
         }
