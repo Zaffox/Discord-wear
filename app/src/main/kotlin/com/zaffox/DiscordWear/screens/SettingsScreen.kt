@@ -20,6 +20,8 @@ import androidx.wear.input.wearableExtender
 fun SettingsScreen() {
     val context   = LocalContext.current
     val listState = rememberScalingLazyListState()
+    var checked by remember { mutableStateOf(true) }
+  
 
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(state = listState) {
@@ -29,6 +31,24 @@ fun SettingsScreen() {
                     style     = MaterialTheme.typography.titleMedium,
                     textAlign = TextAlign.Center,
                     modifier  = Modifier.fillMaxWidth()
+                )
+            }
+            item {
+                SwitchButton(
+                    modifier = modifier.fillMaxWidth(),
+                    label = {
+                        Text(
+                            "Dummy toggle",
+                             maxLines = 1,
+                             overflow = TextOverflow.Ellipsis,
+                             modifier = Modifier.semantics {
+                                  this.contentDescription = if (checked) "On" else "Off"
+                             },
+                        )
+                    },
+                checked = checked,
+                onCheckedChange = { checked = it },
+                enabled = true,
                 )
             }
         }
