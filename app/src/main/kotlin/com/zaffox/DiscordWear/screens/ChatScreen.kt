@@ -1,3 +1,4 @@
+//Add quick responce and server emoji support
 package com.zaffox.discordwear.screens
 
 import android.app.RemoteInput
