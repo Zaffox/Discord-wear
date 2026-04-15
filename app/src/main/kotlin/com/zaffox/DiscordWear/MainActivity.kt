@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
                             onNavigateToDms = { navController.navigate("DMs") },
                             onNavigateToServers = { navController.navigate("servers") },
                             onNavigateToWelcome = { navController.navigate("Welcome") },
-                         //   onNavigateToSettings = { navController.navigate("settings") },
+                            onNavigateToSettings = { navController.navigate("settings") },
                             onNavigateToChat = { chId, chName ->
                                 navController.navigate("chatscreen/$chId/$chName")
                             }
@@ -64,9 +64,9 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                  //  composable("settings") {
-                    //    SettingsScreen()
-                 //   }
+                    composable("settings") {
+                        SettingsScreen()
+                    }
                     composable("DMs") {
                         DmsScreen(onNavigateToChatScreen = { chId, chName ->
                             navController.navigate("chatscreen/$chId/$chName")
