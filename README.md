@@ -4,6 +4,11 @@ better than chat gpt i guess,  at least it is a competent AI, but "just upload t
 
 sigh...
 
+Update: it Actually works?!
+but it lists all channels in a discord server no matter the perms
+
+lmao
+
 # Discord-wear
 Discord For WearOS
 ### 3RD PARTY CLIENTS VIOLATE DISCORDS TERMS OF SERVICE
