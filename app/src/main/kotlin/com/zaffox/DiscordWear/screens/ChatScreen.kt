@@ -141,7 +141,7 @@ private fun MessageBubble(msg: DiscordMessage, isOwn: Boolean, imageLoader: Imag
     ) {
         // Avatar
         if (!isOwn) {
-            DiscordAvatar(url = msg.author.avatarUrl(32), size = 22.dp)
+            DiscordAvatar(url = msg.author.avatarUrl(32), size = 22.dp)//Crop to circle
             Spacer(Modifier.width(4.dp))
         }
 
@@ -165,7 +165,8 @@ private fun MessageBubble(msg: DiscordMessage, isOwn: Boolean, imageLoader: Imag
             msg.attachments.filter { it.isImage }.forEach { att ->
                 MediaImage(url = att.proxyUrl, contentDesc = att.filename, imageLoader = imageLoader)
             }
-
+            //Add @mention logic <@user id>
+            //Add #channel logic <#channel id>
             // Stickers
             msg.stickers.filter { it.isDisplayable }.forEach { sticker ->
                 MediaImage(
