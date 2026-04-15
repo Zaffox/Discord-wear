@@ -15,6 +15,7 @@ import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
 import androidx.wear.input.RemoteInputIntentHelper
 import androidx.wear.input.wearableExtender
+import com.zaffox.discordwear.*
 
 @Composable
 fun SettingsScreen() {
