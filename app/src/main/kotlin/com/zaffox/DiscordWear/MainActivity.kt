@@ -29,9 +29,9 @@ class MainActivity : ComponentActivity() {
                     composable("home") {
                         HomeScreen(
                             onNavigateToDms = { navController.navigate("DMs") },
-                            onNavigateToSettings = { navController.navigate("settings") },
                             onNavigateToServers = { navController.navigate("servers") },
                             onNavigateToWelcome = { navController.navigate("Welcome") },
+                            onNavigateToSettings = { navController.navigate("settings") },
                             onNavigateToChat = { chId, chName ->
                                 navController.navigate("chatscreen/$chId/$chName")
                             }
