@@ -371,10 +371,15 @@ private fun ForwardPreview(
 private fun MessageContent(
     content: String,
     imageLoader: ImageLoader,
-    context: Context
+    context: Context,
+    userNames: Map<String, String>, 
+    channelNames: Map<String, String> = emptyMap()
 ) {
-    val parts = remember(content) { ContentParser.parse(content) }
-
+    val parts = remember(content, userNames, channelNames) {
+        ContentParser.parse(
+            content, userNames = userNames, channelNames = channelNames
+        ) 
+    }
     FlowRow(modifier = Modifier.fillMaxWidth()) {
         parts.forEach { part ->
             when (part) {
