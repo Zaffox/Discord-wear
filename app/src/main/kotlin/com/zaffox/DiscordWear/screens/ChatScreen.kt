@@ -358,7 +358,7 @@ private fun ForwardPreview(
             Text(
                 text = msg.forwardedContent,
                 style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic 
+                //fontStyle = FontStyle.Italic 
             ) 
         } 
     } 
