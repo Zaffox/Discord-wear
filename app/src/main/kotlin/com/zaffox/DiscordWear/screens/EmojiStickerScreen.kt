@@ -76,26 +76,17 @@ fun EmojiStickerScreen(
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(state = listState) {
             // Tab selector
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Button(
-                        modifier = Modifier.weight(1f).height(28.dp),
-                        onClick  = { tab = 0 },
-                        colors   = if (tab == 0) ButtonDefaults.buttonColors()
-                                   else ButtonDefaults.filledTonalButtonColors()
-                    ) { Text("😀", fontSize = 14.sp) }
-                    Button(
-                        modifier = Modifier.weight(1f).height(28.dp),
-                        onClick  = { tab = 1 },
-                        colors   = if (tab == 1) ButtonDefaults.buttonColors()
-                                   else ButtonDefaults.filledTonalButtonColors()
-                    ) { Text("🎭", fontSize = 14.sp) }
+            if (tab == 0) {
+                item {
+                    Text("Emojis", style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                }
+            } else if (tab == 1) {
+                item {
+                    Text("Stickers", style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                 }
             }
-
             if (loading) {
                 item { CircularProgressIndicator() }
             } else if (tab == 0) {
@@ -109,7 +100,7 @@ fun EmojiStickerScreen(
                     items(rows.size) { rowIdx ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.Center)
                         ) {
                             rows[rowIdx].forEach { emoji ->
                                 AsyncImage(
@@ -128,7 +119,7 @@ fun EmojiStickerScreen(
                 }
             } else {
                 // ── Sticker list ───────────────────────────────────────────────
-                if (stickers.isEmpty()) {
+                if (stickers.isEmpty()) {//make multiple rows?
                     item { Text("No stickers.", style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
                 } else {
