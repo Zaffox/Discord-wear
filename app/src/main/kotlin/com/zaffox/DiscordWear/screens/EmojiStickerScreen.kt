@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
  *
  * [onEmojiPicked]   called with the insert string e.g. "<:name:id>"
  * [onStickerPicked] called with the sticker ID
+ * Add Logic for Animated Emoji with no nitro :P
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -39,6 +40,7 @@ fun EmojiStickerScreen(
     guildId: String?,
     onEmojiPicked: (String) -> Unit,
     onStickerPicked: (String) -> Unit
+    //add 'tab' variable to have different button for Chat screen
 ) {
     val context   = LocalContext.current
     val repo      = context.discordApp.repository
