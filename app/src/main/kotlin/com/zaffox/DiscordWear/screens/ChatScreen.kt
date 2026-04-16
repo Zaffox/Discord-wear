@@ -77,6 +77,13 @@ fun ChatScreen(
     val currentUser by repo.currentUser.collectAsState()
     val guilds      by repo.guilds.collectAsState()
     val myId = currentUser?.id ?: currentUserId
+    
+    val userNames = remember(messages) {
+        messages.flatMap { it.mentionedUsers + it.author } 
+                .associate { it.id to it.displayName } 
+    }
+    val channelNames = remember { repo.getChannelNames() } 
+
 
     LaunchedEffect(channelId) {
         if (messages.isEmpty()) {
@@ -216,6 +223,8 @@ private fun MessageBubble(
     msg: DiscordMessage,
     isOwn: Boolean,
     imageLoader: ImageLoader,
+    userNames: Map<String, String>,//!
+    channelNames: Map<String, String>,//!
     onReact: (ReactionEmoji) -> Unit
 ) {
     val context = LocalContext.current
@@ -240,8 +249,22 @@ private fun MessageBubble(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            if (msg.content.isNotBlank()) {
-                MessageContent(content = msg.content, imageLoader = imageLoader, context = context)
+            if (msg.type == 19 && msg.referencedMessage != null) {//!
+                ReplyPreview(msg.referencedMessage, imageLoader, userNames) 
+            } 
+
+            if (msg.type == 23) {//!
+                ForwardPreview(msg, imageLoader, userNames) //!
+            } else {//!
+                if (msg.content.isNotBlank()) {
+                    MessageContent(
+                        content = msg.content,
+                        imageLoader = imageLoader,
+                        context = context,
+                        userNames = userNames,//!
+                        channelNames = channelNames//!
+                    )
+                }//!
             }
 
             msg.attachments.filter { it.isImage }.forEach { att ->
@@ -253,6 +276,7 @@ private fun MessageBubble(
             msg.embeds.forEach { embed ->
                 EmbedCard(embed, imageLoader)
             }
+            
 
             // Reactions row
             if (msg.reactions.isNotEmpty()) {
@@ -266,6 +290,75 @@ private fun MessageBubble(
             }
         }
     }
+}
+
+//!!
+@Composable 
+private fun ReplyPreview(
+    ref: DiscordMessage, 
+    imageLoader: ImageLoader, 
+    userNames: Map<String, String> 
+) {
+    val preview = when {
+        ref.content.isNotBlank() -> ref.content.take(60)
+        ref.stickers.isNotEmpty() -> "[Sticker: ${ref.stickers.first().name}]"
+        ref.attachments.isNotEmpty() -> "[Image]" else -> "[Message]" 
+    } 
+    Row(
+        modifier = Modifier
+            .fillMaxWidth() 
+            .background(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), 
+                shape = RoundedCornerShape(4.dp) 
+            ) 
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // Small avatar 
+        DiscordAvatar(url = ref.author.avatarUrl(16), imageLoader = imageLoader, size = 12.dp) 
+        Text( text = "${ref.author.displayName}: $preview", 
+             style = MaterialTheme.typography.bodyExtraSmall, 
+             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1 
+            ) 
+    } 
+    Spacer(Modifier.height(2.dp)) 
+}//!!
+
+@Composable
+private fun ForwardPreview(
+    msg: DiscordMessage, 
+    imageLoader: ImageLoader, 
+    userNames: Map<String, String> 
+) {
+    Column( 
+        modifier = Modifier 
+            .fillMaxWidth() 
+            .background( 
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(4.dp) 
+            ) 
+            .padding(6.dp) 
+    ) {
+        Text(
+            text = "â†ª Forwarded", 
+            style = MaterialTheme.typography.labelSmall, 
+            color = MaterialTheme.colorScheme.onSurfaceVariant 
+        ) 
+        if (msg.forwardedAuthor != null) {
+            Text(
+                text = msg.forwardedAuthor.displayName,
+                style = MaterialTheme.typography.labelSmall 
+            ) 
+        } 
+        if (!msg.forwardedContent.isNullOrBlank()) {
+            Text(
+                text = msg.forwardedContent,
+                style = MaterialTheme.typography.bodySmall,
+                fontStyle = FontStyle.Italic 
+            ) 
+        } 
+    } 
 }
 
 // ── Content: text + mentions + emoji + links ──────────────────────────────────
