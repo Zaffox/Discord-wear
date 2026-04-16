@@ -191,7 +191,7 @@ fun ChatScreen(
                     }//add emoji material icon
                     FilledIconButton(
                         onClick  = {
-                            showPicker = true,
+                            showPicker = true
                             tab = 1
                         },
                         modifier = Modifier.height(40.dp),
