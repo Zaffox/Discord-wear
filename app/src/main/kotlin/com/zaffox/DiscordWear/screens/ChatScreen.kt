@@ -1,16 +1,13 @@
 package com.zaffox.discordwear.screens
 
 import android.app.RemoteInput
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,7 +15,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
@@ -34,9 +30,15 @@ import coil.compose.AsyncImage
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import coil.request.ImageRequest
+import android.content.Context
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.zaffox.discordwear.api.*
 import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.zaffox.discordwear.R
 
 private const val INPUT_KEY = "message_input"
 
@@ -66,21 +68,15 @@ fun ChatScreen(
     val allMessages by (repo?.messages ?: return).collectAsState()
     val messages = allMessages[channelId].orEmpty()
 
-    var loading    by remember { mutableStateOf(messages.isEmpty()) }
-    var sendError  by remember { mutableStateOf("") }
-    var showPicker by remember { mutableStateOf(false) }
-    val tab by remember { mutableStateOf(0) }
+    var loading      by remember { mutableStateOf(messages.isEmpty()) }
+    var sendError    by remember { mutableStateOf("") }
+    var showPicker   by remember { mutableStateOf(false) }
+    var tab      by remember { mutableStateOf(0) } // 0 = emoji, 1 = stickers
 
+    // Name lookup maps for mention rendering
     val currentUser by repo.currentUser.collectAsState()
+    val guilds      by repo.guilds.collectAsState()
     val myId = currentUser?.id ?: currentUserId
-    val hasNitro = currentUser?.hasNitro ?: false
-
-    // Build a name-lookup map from all seen messages in this channel
-    val userNames = remember(messages) {
-        messages.flatMap { it.mentionedUsers + it.author }
-            .associate { it.id to it.displayName }
-    }
-    val channelNames = remember { repo.getChannelNames() }
 
     LaunchedEffect(channelId) {
         if (messages.isEmpty()) {
@@ -118,9 +114,8 @@ fun ChatScreen(
     // ── Emoji/sticker picker overlay ──────────────────────────────────────────
     if (showPicker) {
         EmojiStickerScreen(
-            tab = tab
-            guildId  = guildId,
-            hasNitro = hasNitro,
+            tab = tab,
+            guildId = guildId,
             onEmojiPicked = { insertText ->
                 showPicker = false
                 scope.launch {
@@ -151,12 +146,10 @@ fun ChatScreen(
                 }
                 else -> items(messages.size) { index ->
                     MessageBubble(
-                        msg          = messages[index],
-                        isOwn        = messages[index].author.id == myId,
-                        imageLoader  = imageLoader,
-                        userNames    = userNames,
-                        channelNames = channelNames,
-                        onReact      = { emoji ->
+                        msg         = messages[index],
+                        isOwn       = messages[index].author.id == myId,
+                        imageLoader = imageLoader,
+                        onReact     = { emoji ->
                             scope.launch { repo.toggleReaction(channelId, messages[index].id, emoji) }
                         }
                     )
@@ -170,6 +163,7 @@ fun ChatScreen(
                 }
             }
 
+            // ── Action buttons ────────────────────────────────────────────────
             item {
                 Button(
                     onClick  = { openInput() },
@@ -178,7 +172,7 @@ fun ChatScreen(
                 ) { Text("Message #$channelName") }
             }
             item {
-                 Row(
+                Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly // Distributes space between buttons 
                 ) {
@@ -222,15 +216,13 @@ private fun MessageBubble(
     msg: DiscordMessage,
     isOwn: Boolean,
     imageLoader: ImageLoader,
-    userNames: Map<String, String>,
-    channelNames: Map<String, String>,
     onReact: (ReactionEmoji) -> Unit
 ) {
     val context = LocalContext.current
 
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
         if (!isOwn) {
@@ -239,7 +231,7 @@ private fun MessageBubble(
         }
 
         Column(
-            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start,
+            horizontalAlignment = Alignment.Start,
             modifier = Modifier.widthIn(max = 155.dp)
         ) {
             Text(
@@ -248,118 +240,30 @@ private fun MessageBubble(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Reply context
-            if (msg.type == 19 && msg.referencedMessage != null) {
-                ReplyPreview(msg.referencedMessage, imageLoader, userNames)
+            if (msg.content.isNotBlank()) {
+                MessageContent(content = msg.content, imageLoader = imageLoader, context = context)
             }
 
-            // Forward
-            if (msg.type == 23) {
-                ForwardPreview(msg, imageLoader, userNames)
-            } else {
-                // Normal content
-                if (msg.content.isNotBlank()) {
-                    MessageContent(
-                        content      = msg.content,
-                        imageLoader  = imageLoader,
-                        context      = context,
-                        userNames    = userNames,
-                        channelNames = channelNames
-                    )
-                }
-                msg.attachments.filter { it.isImage }.forEach { att ->
-                    MediaImage(att.proxyUrl, att.filename, imageLoader)
-                }
-                msg.stickers.filter { it.isDisplayable }.forEach { s ->
-                    MediaImage(s.imageUrl, s.name, imageLoader, size = 80.dp)
-                }
-                msg.embeds.forEach { embed -> EmbedCard(embed, imageLoader) }
+            msg.attachments.filter { it.isImage }.forEach { att ->
+                MediaImage(att.proxyUrl, att.filename, imageLoader)
+            }
+            msg.stickers.filter { it.isDisplayable }.forEach { s ->
+                MediaImage(s.imageUrl, s.name, imageLoader, size = 80.dp)
+            }
+            msg.embeds.forEach { embed ->
+                EmbedCard(embed, imageLoader)
             }
 
-            // Reactions
+            // Reactions row
             if (msg.reactions.isNotEmpty()) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     msg.reactions.forEach { reaction ->
-                        ReactionChip(reaction = reaction, imageLoader = imageLoader,
-                            onClick = { onReact(reaction.emoji) })
+                        ReactionChip(reaction = reaction, imageLoader = imageLoader, onClick = {
+                            onReact(reaction.emoji)
+                        })
                     }
                 }
             }
-        }
-    }
-}
-
-// ── Reply preview ─────────────────────────────────────────────────────────────
-
-@Composable
-private fun ReplyPreview(
-    ref: DiscordMessage,
-    imageLoader: ImageLoader,
-    userNames: Map<String, String>
-) {
-    val preview = when {
-        ref.content.isNotBlank() -> ref.content.take(60)
-        ref.stickers.isNotEmpty() -> "[Sticker: ${ref.stickers.first().name}]"
-        ref.attachments.isNotEmpty() -> "[Image]"
-        else -> "[Message]"
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                color  = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                shape  = RoundedCornerShape(4.dp)
-            )
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        // Small avatar
-        DiscordAvatar(url = ref.author.avatarUrl(16), imageLoader = imageLoader, size = 12.dp)
-        Text(
-            text  = "${ref.author.displayName}: $preview",
-            style = MaterialTheme.typography.bodyExtraSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
-        )
-    }
-    Spacer(Modifier.height(2.dp))
-}
-
-// ── Forward preview ───────────────────────────────────────────────────────────
-
-@Composable
-private fun ForwardPreview(
-    msg: DiscordMessage,
-    imageLoader: ImageLoader,
-    userNames: Map<String, String>
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                shape = RoundedCornerShape(4.dp)
-            )
-            .padding(6.dp)
-    ) {
-        Text(
-            text  = "↪ Forwarded",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (msg.forwardedAuthor != null) {
-            Text(
-                text  = msg.forwardedAuthor.displayName,
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-        if (!msg.forwardedContent.isNullOrBlank()) {
-            Text(
-                text  = msg.forwardedContent,
-                style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic
-            )
         }
     }
 }
@@ -371,13 +275,9 @@ private fun ForwardPreview(
 private fun MessageContent(
     content: String,
     imageLoader: ImageLoader,
-    context: Context,
-    userNames: Map<String, String>,
-    channelNames: Map<String, String> = emptyMap()
+    context: Context
 ) {
-    val parts = remember(content, userNames, channelNames) {
-        ContentParser.parse(content, userNames = userNames, channelNames = channelNames)
-    }
+    val parts = remember(content) { ContentParser.parse(content) }
 
     FlowRow(modifier = Modifier.fillMaxWidth()) {
         parts.forEach { part ->
@@ -395,51 +295,45 @@ private fun MessageContent(
                     )
                 }
                 is ContentParser.Part.UserMention -> {
-                    Text(
-                        text  = buildAnnotatedString {
-                            withStyle(SpanStyle(
-                                color      = MaterialTheme.colorScheme.primary,
-                                background = MaterialTheme.colorScheme.primaryContainer
-                            )) { append("@${part.displayName}") }
-                        },
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(
+                            color      = MaterialTheme.colorScheme.primary,
+                            background = MaterialTheme.colorScheme.primaryContainer
+                        )) { append("@${part.displayName}") }
+                    }
+                    Text(text = annotated, style = MaterialTheme.typography.bodySmall)
                 }
                 is ContentParser.Part.RoleMention -> {
-                    Text(
-                        text  = buildAnnotatedString {
-                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.tertiary)) {
-                                append("@${part.roleName}")
-                            }
-                        },
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(color = MaterialTheme.colorScheme.tertiary)) {
+                            append("@${part.roleName}")
+                        }
+                    }
+                    Text(text = annotated, style = MaterialTheme.typography.bodySmall)
                 }
                 is ContentParser.Part.ChannelMention -> {
-                    Text(
-                        text  = buildAnnotatedString {
-                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.secondary)) {
-                                append("#${part.channelName}")
-                            }
-                        },
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(color = MaterialTheme.colorScheme.secondary)) {
+                            append("#${part.channelName}")
+                        }
+                    }
+                    Text(text = annotated, style = MaterialTheme.typography.bodySmall)
                 }
                 is ContentParser.Part.Link -> {
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(
+                            color          = MaterialTheme.colorScheme.primary,
+                            textDecoration = TextDecoration.Underline
+                        )) { append(part.url) }
+                    }
                     Text(
-                        text  = buildAnnotatedString {
-                            withStyle(SpanStyle(
-                                color          = MaterialTheme.colorScheme.primary,
-                                textDecoration = TextDecoration.Underline
-                            )) { append(part.url) }
-                        },
+                        text     = annotated,
                         style    = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.clickable {
                             runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(part.url))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(part.url))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(intent)
                             }
                         }
                     )
@@ -529,9 +423,9 @@ private fun DiscordAvatar(url: String, imageLoader: ImageLoader, size: Dp) {
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(url).crossfade(true).build(),
-        imageLoader        = imageLoader,
+        imageLoader = imageLoader,
         contentDescription = null,
-        contentScale       = ContentScale.Crop,
-        modifier           = Modifier.size(size)
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.size(size)//.clip(CircleShape) //make avatar circle
     )
 }
