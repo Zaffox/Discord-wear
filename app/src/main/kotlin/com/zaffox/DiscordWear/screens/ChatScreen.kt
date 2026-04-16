@@ -69,6 +69,7 @@ fun ChatScreen(
     var loading    by remember { mutableStateOf(messages.isEmpty()) }
     var sendError  by remember { mutableStateOf("") }
     var showPicker by remember { mutableStateOf(false) }
+    val tab by remember { mutableStateOf(0) }
 
     val currentUser by repo.currentUser.collectAsState()
     val myId = currentUser?.id ?: currentUserId
@@ -117,6 +118,7 @@ fun ChatScreen(
     // ── Emoji/sticker picker overlay ──────────────────────────────────────────
     if (showPicker) {
         EmojiStickerScreen(
+            tab = tab
             guildId  = guildId,
             hasNitro = hasNitro,
             onEmojiPicked = { insertText ->
@@ -176,11 +178,37 @@ fun ChatScreen(
                 ) { Text("Message #$channelName") }
             }
             item {
-                Button(
-                    onClick  = { showPicker = true },
-                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                    colors   = ButtonDefaults.filledTonalButtonColors()
-                ) { Text("😀  Emoji / Sticker") }
+                 Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly // Distributes space between buttons 
+                ) {
+                    FilledIconButton(
+                        onClick  = {
+                            showPicker = true
+                            tab = 0
+                        },
+                        modifier = Modifier.height(40.dp),
+                        //colors   = IconButtonDefaults.filledTonalButtonColors()
+                    ) {//!
+                        Icon(
+                           painter = painterResource(id = R.drawable.emoji),
+                            contentDescription = "Emoji" 
+                        )
+                    }//add emoji material icon
+                    FilledIconButton(
+                        onClick  = {
+                            showPicker = true
+                            tab = 1
+                        },
+                        modifier = Modifier.height(40.dp),
+                        //colors   = IconButtonDefaults.filledTonalButtonColors()
+                    ) { 
+                        Icon(
+                            painter = painterResource(id = R.drawable.sticker),
+                            contentDescription = "Stickers" 
+                        )
+                    } //add sticker material icon
+                }
             }
         }
     }
