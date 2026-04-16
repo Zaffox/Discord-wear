@@ -123,6 +123,55 @@ class DiscordRepository(token: String) {
         return result
     }
 
+    /** Send a sticker. */
+    suspend fun sendSticker(channelId: String, stickerId: String): Result<DiscordMessage> {
+        val result = rest.sendSticker(channelId, stickerId)
+        result.onSuccess { msg ->
+            _messages.update { current ->
+                val list = current[channelId].orEmpty().toMutableList()
+                if (list.none { it.id == msg.id }) list.add(msg)
+                current + (channelId to list)
+            }
+        }
+        return result
+    }
+
+    /** Toggle a reaction on a message (add if not reacted, remove if already reacted). */
+    suspend fun toggleReaction(channelId: String, messageId: String, emoji: ReactionEmoji) {
+        val msg = _messages.value[channelId]?.firstOrNull { it.id == messageId } ?: return
+        val existing = msg.reactions.firstOrNull { it.emoji.apiKey == emoji.apiKey }
+        if (existing?.me == true) {
+            rest.removeReaction(channelId, messageId, emoji.apiKey)
+            updateReactionLocally(channelId, messageId, emoji, delta = -1, me = false)
+        } else {
+            rest.addReaction(channelId, messageId, emoji.apiKey)
+            updateReactionLocally(channelId, messageId, emoji, delta = +1, me = true)
+        }
+    }
+
+    private fun updateReactionLocally(
+        channelId: String, messageId: String,
+        emoji: ReactionEmoji, delta: Int, me: Boolean
+    ) {
+        _messages.update { current ->
+            val list = current[channelId]?.map { msg ->
+                if (msg.id != messageId) return@map msg
+                val existing = msg.reactions.firstOrNull { it.emoji.apiKey == emoji.apiKey }
+                val newReactions = if (existing != null) {
+                    val newCount = existing.count + delta
+                    if (newCount <= 0) msg.reactions.filter { it.emoji.apiKey != emoji.apiKey }
+                    else msg.reactions.map {
+                        if (it.emoji.apiKey == emoji.apiKey) it.copy(count = newCount, me = me) else it
+                    }
+                } else {
+                    msg.reactions + Reaction(emoji, 1, me = true)
+                }
+                msg.copy(reactions = newReactions)
+            } ?: return@update current
+            current + (channelId to list)
+        }
+    }
+
     // ── Gateway event handling ────────────────────────────────────────────────
 
     private fun observeGatewayEvents() {
@@ -183,6 +232,28 @@ class DiscordRepository(token: String) {
                                 ?: return@update current
                             current + (event.channelId to list)
                         }
+                    }
+
+                    is GatewayEvent.ReactionAdd -> {
+                        val myId = currentUserId
+                        updateReactionLocally(
+                            channelId = event.channelId,
+                            messageId = event.messageId,
+                            emoji     = event.emoji,
+                            delta     = +1,
+                            me        = event.userId == myId
+                        )
+                    }
+
+                    is GatewayEvent.ReactionRemove -> {
+                        val myId = currentUserId
+                        updateReactionLocally(
+                            channelId = event.channelId,
+                            messageId = event.messageId,
+                            emoji     = event.emoji,
+                            delta     = -1,
+                            me        = event.userId == myId && false // remove doesn't flip me
+                        )
                     }
 
                     is GatewayEvent.TypingStart -> {

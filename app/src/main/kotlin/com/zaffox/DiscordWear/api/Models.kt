@@ -347,39 +347,149 @@ data class StickerItem(
     }
 }
 
-// ── Custom emoji helper ───────────────────────────────────────────────────────
+// ── Content parser ────────────────────────────────────────────────────────────
 
 /**
- * Parses Discord custom emoji syntax from message content.
- *   Static:   <:name:id>    → https://cdn.discordapp.com/emojis/{id}.png
- *   Animated: <a:name:id>   → https://cdn.discordapp.com/emojis/{id}.gif
+ * Parses Discord message content into typed segments:
+ *   - Plain text (possibly containing URLs)
+ *   - Custom emoji  <:name:id> / <a:name:id>
+ *   - User mention  <@userid> / <@!userid>
+ *   - Role mention  <@&roleid>
+ *   - Channel mention <#channelid>
+ *
+ * The caller supplies name-lookup maps so mentions can display human-readable
+ * names rather than raw IDs.
  */
-object EmojiParser {
-    private val CUSTOM_EMOJI_RE = Regex("<(a?):(\\w+):(\\d+)>")
+object ContentParser {
 
-    data class ParsedPart(
-        val text: String?,          // non-null for plain text segments
-        val emojiUrl: String?,      // non-null for custom emoji
-        val emojiName: String?      // e.g. "pepe"
+    sealed class Part {
+        data class PlainText(val text: String) : Part()
+        data class CustomEmoji(val name: String, val url: String, val animated: Boolean) : Part()
+        data class UserMention(val userId: String, val displayName: String) : Part()
+        data class RoleMention(val roleId: String, val roleName: String) : Part()
+        data class ChannelMention(val channelId: String, val channelName: String) : Part()
+        data class Link(val url: String) : Part()
+    }
+
+    private val TOKEN_RE = Regex(
+        "<a?:\\w+:\\d+>" +              // custom emoji
+        "|<@!?\\d+>" +                  // user mention
+        "|<@&\\d+>" +                   // role mention
+        "|<#\\d+>" +                    // channel mention
+        "|https?://[^\\s>]+"            // URL
     )
 
-    fun parse(content: String): List<ParsedPart> {
-        if (!content.contains('<')) return listOf(ParsedPart(content, null, null))
-        val parts = mutableListOf<ParsedPart>()
+    fun parse(
+        content: String,
+        userNames:    Map<String, String> = emptyMap(),   // userId → displayName
+        roleNames:    Map<String, String> = emptyMap(),   // roleId → name
+        channelNames: Map<String, String> = emptyMap()    // channelId → name
+    ): List<Part> {
+        if (content.isBlank()) return emptyList()
+        val parts = mutableListOf<Part>()
         var last = 0
-        for (match in CUSTOM_EMOJI_RE.findAll(content)) {
+
+        for (match in TOKEN_RE.findAll(content)) {
             if (match.range.first > last) {
-                parts += ParsedPart(content.substring(last, match.range.first), null, null)
+                parts += Part.PlainText(content.substring(last, match.range.first))
             }
-            val animated = match.groupValues[1] == "a"
-            val name = match.groupValues[2]
-            val id   = match.groupValues[3]
-            val ext  = if (animated) "gif" else "webp"
-            parts += ParsedPart(null, "https://cdn.discordapp.com/emojis/$id.$ext?size=32", name)
+            val token = match.value
+            when {
+                // Custom emoji  <:name:id>  or  <a:name:id>
+                token.startsWith("<:") || token.startsWith("<a:") -> {
+                    val animated = token.startsWith("<a:")
+                    val inner = token.removeSurrounding("<", ">").trimStart('a', ':').trimStart(':')
+                    val segments = inner.split(":")
+                    if (segments.size == 2) {
+                        val name = segments[0]; val id = segments[1]
+                        val ext = if (animated) "gif" else "webp"
+                        parts += Part.CustomEmoji(
+                            name     = name,
+                            url      = "https://cdn.discordapp.com/emojis/$id.$ext?size=32",
+                            animated = animated
+                        )
+                    } else parts += Part.PlainText(token)
+                }
+                // Role mention  <@&id>
+                token.startsWith("<@&") -> {
+                    val id = token.removeSurrounding("<@&", ">")
+                    parts += Part.RoleMention(id, roleNames[id] ?: "@deleted-role")
+                }
+                // User mention  <@id>  or  <@!id>
+                token.startsWith("<@") -> {
+                    val id = token.removePrefix("<@!").removePrefix("<@").removeSuffix(">")
+                    parts += Part.UserMention(id, userNames[id] ?: "@unknown")
+                }
+                // Channel mention  <#id>
+                token.startsWith("<#") -> {
+                    val id = token.removeSurrounding("<#", ">")
+                    parts += Part.ChannelMention(id, channelNames[id] ?: "#unknown")
+                }
+                // URL
+                token.startsWith("http") -> parts += Part.Link(token)
+                else -> parts += Part.PlainText(token)
+            }
             last = match.range.last + 1
         }
-        if (last < content.length) parts += ParsedPart(content.substring(last), null, null)
-        return parts
+        if (last < content.length) parts += Part.PlainText(content.substring(last))
+        return parts.filter { it !is Part.PlainText || (it as Part.PlainText).text.isNotEmpty() }
+    }
+}
+
+// ── Reaction ──────────────────────────────────────────────────────────────────
+
+data class Reaction(
+    val emoji: ReactionEmoji,
+    val count: Int,
+    val me: Boolean        // true if the current user reacted
+)
+
+data class ReactionEmoji(
+    val id: String?,       // null for standard Unicode emoji
+    val name: String,      // unicode char or custom emoji name
+    val animated: Boolean
+) {
+    /** For PUT/DELETE — Unicode emoji uses the char; custom uses name:id */
+    val apiKey: String get() =
+        if (id != null) "$name:$id" else name
+
+    /** URL for custom emoji, null for standard unicode */
+    val imageUrl: String? get() = if (id != null) {
+        val ext = if (animated) "gif" else "webp"
+        "https://cdn.discordapp.com/emojis/$id.$ext?size=16"
+    } else null
+
+    companion object {
+        fun fromJson(o: JSONObject) = ReactionEmoji(
+            id       = o.optString("id").takeIf { it.isNotEmpty() },
+            name     = o.optString("name").ifEmpty { "?" },
+            animated = o.optBoolean("animated", false)
+        )
+    }
+}
+
+// ── GuildEmoji (for picker) ───────────────────────────────────────────────────
+
+data class GuildEmoji(
+    val id: String,
+    val name: String,
+    val animated: Boolean
+) {
+    val imageUrl: String get() {
+        val ext = if (animated) "gif" else "webp"
+        return "https://cdn.discordapp.com/emojis/$id.$ext?size=32"
+    }
+    /** Content string to insert into a message */
+    val insertText: String get() = if (animated) "<a:$name:$id>" else "<:$name:$id>"
+
+    companion object {
+        fun fromJson(o: JSONObject) = GuildEmoji(
+            id       = o.getString("id"),
+            name     = o.getString("name"),
+            animated = o.optBoolean("animated", false)
+        )
+        fun listFromJson(arr: JSONArray): List<GuildEmoji> =
+            (0 until arr.length()).map { fromJson(arr.getJSONObject(it)) }
     }
 }
 
@@ -395,6 +505,7 @@ data class DiscordMessage(
     val attachments: List<Attachment> = emptyList(),
     val embeds: List<Embed> = emptyList(),
     val stickers: List<StickerItem> = emptyList(),
+    val reactions: List<Reaction> = emptyList(),
     /** Users mentioned in this message */
     val mentionedUserIds: List<String> = emptyList(),
     /** Role IDs mentioned */
@@ -437,6 +548,20 @@ data class DiscordMessage(
                 (0 until stickerArr.length()).map { StickerItem.fromJson(stickerArr.getJSONObject(it)) }
             else emptyList()
 
+            val reactArr = o.optJSONArray("reactions")
+            val reactions = if (reactArr != null)
+                (0 until reactArr.length()).mapNotNull { i ->
+                    runCatching {
+                        val r = reactArr.getJSONObject(i)
+                        Reaction(
+                            emoji = ReactionEmoji.fromJson(r.getJSONObject("emoji")),
+                            count = r.getInt("count"),
+                            me    = r.optBoolean("me", false)
+                        )
+                    }.getOrNull()
+                }
+            else emptyList()
+
             return DiscordMessage(
                 id               = o.getString("id"),
                 channelId        = o.getString("channel_id"),
@@ -447,6 +572,7 @@ data class DiscordMessage(
                 attachments      = attachments,
                 embeds           = embeds,
                 stickers         = stickers,
+                reactions        = reactions,
                 mentionedUserIds = mentionedUsers,
                 mentionedRoleIds = mentionedRoles,
                 mentionEveryone  = o.optBoolean("mention_everyone", false),
@@ -466,3 +592,4 @@ data class Ping(
     val channelName: String,
     val guildName: String?   // null for DMs
 )
+// kept at end — reactions/emojis already defined above

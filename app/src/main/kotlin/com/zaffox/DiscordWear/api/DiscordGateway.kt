@@ -70,7 +70,7 @@ class DiscordGateway(private val token: String) {
     // ── Connect / Disconnect ──────────────────────────────────────────────────
 
     fun connect() {
-        val url = resumeUrl ?: "wss://gateway.discord.gg/?v=10&encoding=json"//discord wss API 
+        val url = resumeUrl ?: "wss://gateway.discord.gg/?v=10&encoding=json"
         val request = Request.Builder().url(url).build()
         ws = http.newWebSocket(request, Listener())
     }
@@ -78,7 +78,7 @@ class DiscordGateway(private val token: String) {
     fun disconnect() {
         connected = false
         heartbeatJob?.cancel()
-        ws?.close(1000, "Goodbye") //Goodbye for human readable
+        ws?.close(1000, "Goodbye")
         ws = null
     }
 
@@ -102,7 +102,7 @@ class DiscordGateway(private val token: String) {
             .put("intents", INTENTS)
             .put("properties", JSONObject()
                 .put("\$os", "android")
-                .put("\$browser", "discord_wear")//device identifier? -cant find it in my device list
+                .put("\$browser", "discord_wear")
                 .put("\$device", "wearos"))
         send(Op.IDENTIFY, d)
     }
@@ -165,7 +165,7 @@ class DiscordGateway(private val token: String) {
             heartbeatJob?.cancel()
             scope.launch {
                 delay(5_000)
-                connect()//need to add check for http error 401 for valid token
+                connect()
             }
         }
 
@@ -180,7 +180,7 @@ class DiscordGateway(private val token: String) {
     private fun startHeartbeat(intervalMs: Long) {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
-            delay((intervalMs * Math.random()).toLong()) // jitter on first beat - why?
+            delay((intervalMs * Math.random()).toLong()) // jitter on first beat
             while (isActive) {
                 sendHeartbeat()
                 delay(intervalMs)
@@ -210,6 +210,22 @@ class DiscordGateway(private val token: String) {
                 GatewayEvent.MessageDelete(
                     id        = d.getString("id"),
                     channelId = d.getString("channel_id")
+                )
+            }.getOrNull()
+            "MESSAGE_REACTION_ADD" -> runCatching {
+                GatewayEvent.ReactionAdd(
+                    messageId = d.getString("message_id"),
+                    channelId = d.getString("channel_id"),
+                    userId    = d.getString("user_id"),
+                    emoji     = ReactionEmoji.fromJson(d.getJSONObject("emoji"))
+                )
+            }.getOrNull()
+            "MESSAGE_REACTION_REMOVE" -> runCatching {
+                GatewayEvent.ReactionRemove(
+                    messageId = d.getString("message_id"),
+                    channelId = d.getString("channel_id"),
+                    userId    = d.getString("user_id"),
+                    emoji     = ReactionEmoji.fromJson(d.getJSONObject("emoji"))
                 )
             }.getOrNull()
             "TYPING_START" -> runCatching {
@@ -245,6 +261,8 @@ sealed class GatewayEvent {
     data class MessageCreate(val message: DiscordMessage) : GatewayEvent()
     data class MessageUpdate(val message: DiscordMessage) : GatewayEvent()
     data class MessageDelete(val id: String, val channelId: String) : GatewayEvent()
+    data class ReactionAdd(val messageId: String, val channelId: String, val userId: String, val emoji: ReactionEmoji) : GatewayEvent()
+    data class ReactionRemove(val messageId: String, val channelId: String, val userId: String, val emoji: ReactionEmoji) : GatewayEvent()
     data class TypingStart(val channelId: String, val userId: String) : GatewayEvent()
     data class Unknown(val name: String) : GatewayEvent()
 }

@@ -40,7 +40,7 @@ class DiscordRestClient(private val token: String) {
         Request.Builder()
             .url("$baseUrl$path")
             .header("Authorization", token)           // token already has "Bot " prefix if bot
-            .header("User-Agent", "DiscordWear/1.0 (WearOS)")//add device model?
+            .header("User-Agent", "DiscordWear/1.0 (WearOS)")
 
     /** Execute a request and return the body as a string, or throw on HTTP error. */
     private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
@@ -165,6 +165,50 @@ class DiscordRestClient(private val token: String) {
                 .post("".toRequestBody(jsonMime))
                 .build())
         }
+    }
+
+    /** GET /guilds/{guildId}/emojis — custom emojis for the picker */
+    suspend fun getGuildEmojis(guildId: String): Result<List<GuildEmoji>> = runCatching {
+        GuildEmoji.listFromJson(JSONArray(get("/guilds/$guildId/emojis")))
+    }
+
+    /** GET /guilds/{guildId}/stickers — guild-specific stickers */
+    suspend fun getGuildStickers(guildId: String): Result<List<StickerItem>> = runCatching {
+        val arr = JSONArray(get("/guilds/$guildId/stickers"))
+        (0 until arr.length()).map { StickerItem.fromJson(arr.getJSONObject(it)) }
+    }
+
+    /**
+     * Send a message with a sticker.
+     * Discord requires sticker_ids to be sent separately from content.
+     */
+    suspend fun sendSticker(channelId: String, stickerId: String): Result<DiscordMessage> = runCatching {
+        val body = JSONObject().put("sticker_ids", org.json.JSONArray().put(stickerId))
+        DiscordMessage.fromJson(JSONObject(post("/channels/$channelId/messages", body)))
+    }
+
+    /**
+     * PUT /channels/{channelId}/messages/{messageId}/reactions/{emoji}/@me
+     * Adds a reaction. [emojiKey] is the URL-encoded emoji identifier.
+     */
+    suspend fun addReaction(channelId: String, messageId: String, emojiKey: String): Result<Unit> = runCatching {
+        val encoded = java.net.URLEncoder.encode(emojiKey, "UTF-8")
+        execute(buildRequest("/channels/$channelId/messages/$messageId/reactions/$encoded/@me")
+            .put("".toRequestBody(jsonMime))
+            .build())
+        Unit
+    }
+
+    /**
+     * DELETE /channels/{channelId}/messages/{messageId}/reactions/{emoji}/@me
+     * Removes the current user's reaction.
+     */
+    suspend fun removeReaction(channelId: String, messageId: String, emojiKey: String): Result<Unit> = runCatching {
+        val encoded = java.net.URLEncoder.encode(emojiKey, "UTF-8")
+        execute(buildRequest("/channels/$channelId/messages/$messageId/reactions/$encoded/@me")
+            .delete()
+            .build())
+        Unit
     }
 }
 
