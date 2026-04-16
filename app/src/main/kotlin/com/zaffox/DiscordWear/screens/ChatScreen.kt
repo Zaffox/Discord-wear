@@ -77,6 +77,7 @@ fun ChatScreen(
     val currentUser by repo.currentUser.collectAsState()
     val guilds      by repo.guilds.collectAsState()
     val myId = currentUser?.id ?: currentUserId
+    val hasNitro = currentUser?.hasNitro ?: false
     
     val userNames = remember(messages) {
         messages.flatMap { it.mentionedUsers + it.author } 
@@ -156,6 +157,8 @@ fun ChatScreen(
                         msg         = messages[index],
                         isOwn       = messages[index].author.id == myId,
                         imageLoader = imageLoader,
+                        userNames = userNames, 
+                        channelNames = channelNames,
                         onReact     = { emoji ->
                             scope.launch { repo.toggleReaction(channelId, messages[index].id, emoji) }
                         }
