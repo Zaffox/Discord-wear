@@ -38,6 +38,7 @@ import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
+import com.zaffox.discordwear.R
 
 private const val INPUT_KEY = "message_input"
 
