@@ -16,10 +16,9 @@ import com.zaffox.discordwear.discordApp
 @Composable
 fun HomeScreen(
     onNavigateToDms: () -> Unit,
-    onNavigateToSettings: () -> Unit,
     onNavigateToServers: () -> Unit,
     onNavigateToWelcome: () -> Unit,
-    onNavigateToChat: (channelId: String, channelName: String) -> Unit
+    onNavigateToChat: (channelId: String, channelName: String, guildId: String?) -> Unit
 ) {
     val context   = LocalContext.current
     val listState = rememberScalingLazyListState()
@@ -70,8 +69,13 @@ fun HomeScreen(
                     )
                 }
                 items(pings.size) { index ->
-                    PingCard(ping = pings[index], onClick = {
-                        onNavigateToChat(pings[index].message.channelId, pings[index].channelName)
+                    val ping = pings[index]
+                    PingCard(ping = ping, onClick = {
+                        onNavigateToChat(
+                            ping.message.channelId,
+                            ping.channelName,
+                            ping.message.guildId
+                        )
                     })
                 }
             } else {
@@ -83,13 +87,6 @@ fun HomeScreen(
                         modifier = Modifier.padding(top = 6.dp)
                     )
                 }
-            }
-            item {
-                Button(
-                    modifier = Modifier,
-                    onClick  = onNavigateToSettings,
-                    colors   = ButtonDefaults.filledTonalButtonColors()
-                ) { Text("Settings") }//set to gear icon later
             }
         }
     }

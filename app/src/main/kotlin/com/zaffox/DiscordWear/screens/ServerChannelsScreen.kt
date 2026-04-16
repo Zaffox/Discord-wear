@@ -11,7 +11,7 @@ import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
 import com.zaffox.discordwear.api.CategoryGroup
-import com.zaffox.discordwear.*
+import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
 
 @Composable
@@ -66,8 +66,8 @@ fun ServerChannels(
                                 Text(
                                     text  = "▸ ${group.category.name.uppercase()}",
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 10.sp,
+                                        fontWeight    = FontWeight.Bold,
+                                        fontSize      = 10.sp,
                                         letterSpacing = 1.sp
                                     ),
                                     color    = MaterialTheme.colorScheme.onSurfaceVariant,
