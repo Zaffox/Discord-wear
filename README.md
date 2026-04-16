@@ -1,3 +1,4 @@
+
 # Discord-wear
 Discord For WearOS
 ### 3RD PARTY CLIENTS VIOLATE DISCORDS TERMS OF SERVICE
@@ -23,4 +24,4 @@ Not Working
 what will Never work
 - voice calls (E2E Requirement)
 - Joining server (Captha)
-- login via email + password (Captha)
+_

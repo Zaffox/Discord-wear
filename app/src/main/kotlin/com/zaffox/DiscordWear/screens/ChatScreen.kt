@@ -157,6 +157,9 @@ fun ChatScreen(
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+    }
+}
 
             // ── Action buttons ────────────────────────────────────────────────
             item {
@@ -307,8 +310,102 @@ private fun MessageContent(
                         }
                     )
                 }
+                is ContentParser.Part.Link -> {
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(
+                            color          = MaterialTheme.colorScheme.primary,
+                            textDecoration = TextDecoration.Underline
+                        )) { append(part.url) }
+                    }
+                    Text(
+                        text     = annotated,
+                        style    = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.clickable {
+                            runCatching {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(part.url))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(intent)
+                            }
+                        }
+                    )
+                }
             }
         }
+    }
+}
+
+// ── Reaction chip ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun ReactionChip(reaction: Reaction, imageLoader: ImageLoader, onClick: () -> Unit) {
+    val bgColor = if (reaction.me)
+        MaterialTheme.colorScheme.primaryContainer
+    else
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+
+    Box(
+        modifier = Modifier
+            .height(22.dp)
+            .background(color = bgColor, shape = RoundedCornerShape(11.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            val imgUrl = reaction.emoji.imageUrl
+            if (imgUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(imgUrl).crossfade(true).build(),
+                    imageLoader        = imageLoader,
+                    contentDescription = reaction.emoji.name,
+                    modifier           = Modifier.size(14.dp)
+                )
+            } else {
+                Text(reaction.emoji.name, fontSize = 12.sp)
+            }
+            Text(
+                text     = reaction.count.toString(),
+                style    = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp
+            )
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+@Composable
+private fun MediaImage(url: String, contentDesc: String, imageLoader: ImageLoader, size: Dp = 120.dp) {
+    AsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(url).crossfade(true).build(),
+        imageLoader        = imageLoader,
+        contentDescription = contentDesc,
+        contentScale       = ContentScale.Fit,
+        modifier           = Modifier.padding(top = 2.dp).widthIn(max = size).heightIn(max = size)
+    )
+}
+
+@Composable
+private fun EmbedCard(embed: Embed, imageLoader: ImageLoader) {
+    val imgUrl = embed.displayImageUrl ?: return
+    Column(modifier = Modifier.padding(top = 2.dp)) {
+        embed.title?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary)
+        }
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(imgUrl).crossfade(true).build(),
+            imageLoader        = imageLoader,
+            contentDescription = embed.title ?: "embed",
+            contentScale       = ContentScale.Fit,
+            modifier           = Modifier.widthIn(max = 140.dp).heightIn(max = 140.dp)
+        )
     }
 }
 

@@ -37,6 +37,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += ["-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi"]
     }
 }
 
@@ -48,4 +49,7 @@ dependencies {
     implementation libs.wear.compose.navigation
     implementation libs.kotlinx.coroutines
     implementation libs.wear.input
+    implementation libs.okhttp
+    implementation libs.coil.compose
+    implementation libs.coil.gif
 }
