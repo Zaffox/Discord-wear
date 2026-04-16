@@ -589,12 +589,19 @@ data class DiscordMessage(
             var fwdAuthor: DiscordUser? = null
             if (msgType == 23) {
                 val snapshots = o.optJSONArray("message_snapshots")
-                if (snapshots != null && snapshots.length() > 0) {
-                    runCatching {
-                        val snap = snapshots.getJSONObject(0).optJSONObject("message")
-                        if (snap != null) {
-                            fwdContent = snap.optString("content").takeIf { it.isNotEmpty() }
-                            fwdAuthor  = snap.optJSONObject("author")?.let { DiscordUser.fromJson(it) }
+                if (snapshots != null) {
+                    for (i in 0 until snapshots.length()) {
+                        val snapMsg = snapshots.getJSONObject(i)
+                        .optJSONObject("message") ?: continue
+
+                        val content = snapMsg.optString("content", null)
+                        val author = snapMsg.optJSONObject("author")
+                            ?.let { DiscordUser.fromJson(it) }
+
+                        if (!content.isNullOrEmpty() || author != null) {
+                            fwdContent = content
+                            fwdAuthor = author
+                            break
                         }
                     }
                 }
