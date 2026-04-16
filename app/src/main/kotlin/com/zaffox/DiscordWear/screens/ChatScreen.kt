@@ -176,10 +176,10 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly // Distributes space between buttons 
             ) {
                 item {
-                    IconButton(
+                    FilledIconButton(
                         onClick  = { showPicker = true },
                         modifier = Modifier.height(36.dp),
-                        colors   = IconButtonDefaults.filledTonalButtonColors()
+                        //colors   = IconButtonDefaults.filledTonalButtonColors()
                     ) {
                         Icon(
                             painter = painterResource(id = R.drawable.emoji),
@@ -188,10 +188,10 @@ fun ChatScreen(
                     }//add emoji material icon
                 }
                 item {
-                    IconButton(
+                    FilledIconButton(
                         onClick  = { showPicker = true },
                         modifier = Modifier.height(36.dp),
-                        colors   = IconButtonDefaults.filledTonalButtonColors()
+                        //colors   = IconButtonDefaults.filledTonalButtonColors()
                     ) { 
                         Icon(
                             painter = painterResource(id = R.drawable.sticker),
