@@ -166,12 +166,24 @@ fun ChatScreen(
                     colors   = ButtonDefaults.filledTonalButtonColors()
                 ) { Text("Message #$channelName") }
             }
-            item {
-                Button(
-                    onClick  = { showPicker = true },
-                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                    colors   = ButtonDefaults.filledTonalButtonColors()
-                ) { Text("😀  Emoji / Sticker") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly // Distributes space between buttons 
+            ) {
+                item {
+                    Button(
+                        onClick  = { showPicker = true },
+                        modifier = Modifier.height(36.dp),
+                        colors   = ButtonDefaults.filledTonalButtonColors()
+                    ) { Text(":)") }//add emoji material icon
+                }
+                item {
+                    Button(
+                        onClick  = { showPicker = true },
+                        modifier = Modifier.height(36.dp),
+                        colors   = ButtonDefaults.filledTonalButtonColors()
+                    ) { Text("St") } //add sticker material icon
+                }
             }
         }
     }
@@ -191,7 +203,7 @@ private fun MessageBubble(
 
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
         if (!isOwn) {
@@ -200,7 +212,7 @@ private fun MessageBubble(
         }
 
         Column(
-            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start,
+            horizontalAlignment = Alignment.Start,
             modifier = Modifier.widthIn(max = 155.dp)
         ) {
             Text(
@@ -392,9 +404,9 @@ private fun DiscordAvatar(url: String, imageLoader: ImageLoader, size: Dp) {
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(url).crossfade(true).build(),
-        imageLoader        = imageLoader,
+        imageLoader = imageLoader,
         contentDescription = null,
-        contentScale       = ContentScale.Crop,
-        modifier           = Modifier.size(size).clip(CircleShape) //make avatar circle
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.size(size).clip(CircleShape) //make avatar circle
     )
 }
