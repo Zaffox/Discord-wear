@@ -41,8 +41,6 @@ import androidx.compose.ui.res.painterResource
 import com.zaffox.discordwear.R
 import androidx.wear.compose.material3.IconButton
 import androidx.wear.compose.material3.IconButtonDefaults
-import androidx.compose.material.icons.rounded.SentimentSatisfied
-import androidx.compose.material.icons.rounded.Sticker
 
 private const val INPUT_KEY = "message_input"
 
@@ -184,8 +182,7 @@ fun ChatScreen(
                         //colors   = IconButtonDefaults.filledTonalButtonColors()
                     ) {//!
                         Icon(
-                            //painter = painterResource(id = R.drawable.emoji),//cant get default symbol for some reason, but this is good enough
-                            imageVector = Icons.Rounded.SentimentSatisfied,
+                           painter = painterResource(id = R.drawable.emoji),
                             contentDescription = "Emoji" 
                         )
                     }//add emoji material icon
@@ -195,8 +192,7 @@ fun ChatScreen(
                         //colors   = IconButtonDefaults.filledTonalButtonColors()
                     ) { 
                         Icon(
-                            //painter = painterResource(id = R.drawable.sticker),
-                            imageVector = Icons.Rounded.Sticker,
+                            painter = painterResource(id = R.drawable.sticker),
                             contentDescription = "Stickers" 
                         )
                     } //add sticker material icon
