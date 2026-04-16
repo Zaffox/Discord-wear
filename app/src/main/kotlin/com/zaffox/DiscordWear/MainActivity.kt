@@ -13,46 +13,44 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Re-hydrate repository from saved token on cold start
         val token = SetupPreferences.getToken(this)
-        if (token != null) {
-            discordApp.initRepository(token)
-        }
+        if (token != null) discordApp.initRepository(token)
 
         setContent {
             MaterialTheme {
                 val navController = rememberSwipeDismissableNavController()
-                SwipeDismissableNavHost(
-                    navController    = navController,
-                    startDestination = "home"
-                ) {
+                SwipeDismissableNavHost(navController = navController, startDestination = "home") {
+
                     composable("home") {
                         HomeScreen(
-                            onNavigateToDms = { navController.navigate("DMs") },
+                            onNavigateToDms     = { navController.navigate("DMs") },
                             onNavigateToServers = { navController.navigate("servers") },
                             onNavigateToWelcome = { navController.navigate("Welcome") },
-                            onNavigateToSettings = { navController.navigate("settings") },
-                            onNavigateToChat = { chId, chName ->
-                                navController.navigate("chatscreen/$chId/$chName")
+                            onNavigateToChat    = { chId, chName, guildId ->
+                                val guildSeg = guildId ?: "dm"
+                                navController.navigate("chatscreen/$chId/$chName/$guildSeg")
                             }
                         )
                     }
+
                     composable("Welcome") {
-                        WelcomeScreen(
-                            onSetupComplete = {
-                                navController.navigate("home") {
-                                    popUpTo("Welcome") { inclusive = true }
-                                }
+                        WelcomeScreen(onSetupComplete = {
+                            navController.navigate("home") {
+                                popUpTo("Welcome") { inclusive = true }
                             }
-                        )
+                        })
                     }
-                    // chatscreen/{channelId}/{channelName}
-                    composable("chatscreen/{channelId}/{channelName}") { back ->
+
+                    // chatscreen/{channelId}/{channelName}/{guildId}
+                    // guildId = "dm" means no guild (DM)
+                    composable("chatscreen/{channelId}/{channelName}/{guildId}") { back ->
                         val channelId   = back.arguments?.getString("channelId")   ?: return@composable
                         val channelName = back.arguments?.getString("channelName") ?: channelId
-                        ChatScreen(channelId = channelId, channelName = channelName)
+                        val guildIdArg  = back.arguments?.getString("guildId")
+                        val guildId     = if (guildIdArg == "dm") null else guildIdArg
+                        ChatScreen(channelId = channelId, channelName = channelName, guildId = guildId)
                     }
-                    // ServerChannels/{guildId}/{guildName}
+
                     composable("ServerChannels/{guildId}/{guildName}") { back ->
                         val guildId   = back.arguments?.getString("guildId")   ?: return@composable
                         val guildName = back.arguments?.getString("guildName") ?: guildId
@@ -60,18 +58,17 @@ class MainActivity : ComponentActivity() {
                             guildId              = guildId,
                             guildName            = guildName,
                             onNavigateToChatScreen = { chId, chName ->
-                                navController.navigate("chatscreen/$chId/$chName")
+                                navController.navigate("chatscreen/$chId/$chName/$guildId")
                             }
                         )
                     }
-                    composable("settings") {
-                        SettingsScreen()
-                    }
+
                     composable("DMs") {
                         DmsScreen(onNavigateToChatScreen = { chId, chName ->
-                            navController.navigate("chatscreen/$chId/$chName")
+                            navController.navigate("chatscreen/$chId/$chName/dm")
                         })
                     }
+
                     composable("servers") {
                         ServerScreen(onNavigateToChannels = { gId, gName ->
                             navController.navigate("ServerChannels/$gId/$gName")
