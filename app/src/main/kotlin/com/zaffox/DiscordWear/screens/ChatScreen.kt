@@ -171,28 +171,30 @@ fun ChatScreen(
                     colors   = ButtonDefaults.filledTonalButtonColors()
                 ) { Text("Message #$channelName") }
             }
-            item {//!
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly // Distributes space between buttons 
                 ) {
-                    IconButton(//!
+                    FilledIconButton(
                         onClick  = { showPicker = true },
-                        modifier = Modifier.height(36.dp),
+                        modifier = Modifier.height(40.dp),
                         //colors   = IconButtonDefaults.filledTonalButtonColors()
                     ) {//!
                         Icon(
-                            painter = painterResource(id = R.drawable.emoji),//!
+                            //painter = painterResource(id = R.drawable.emoji),//cant get default symbol for some reason, but this is good enough
+                            imageVector = Icons.Rounded.SentimentSatisfied,
                             contentDescription = "Emoji" 
                         )
                     }//add emoji material icon
-                    IconButton(
+                    FilledIconButton(
                         onClick  = { showPicker = true },
-                        modifier = Modifier.height(36.dp),
+                        modifier = Modifier.height(40.dp),
                         //colors   = IconButtonDefaults.filledTonalButtonColors()
                     ) { 
                         Icon(
-                            painter = painterResource(id = R.drawable.sticker),
+                            //painter = painterResource(id = R.drawable.sticker),
+                            imageVector = Icons.Rounded.Sticker,
                             contentDescription = "Stickers" 
                         )
                     } //add sticker material icon
