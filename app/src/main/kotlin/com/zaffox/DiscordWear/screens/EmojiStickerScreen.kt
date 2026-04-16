@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun EmojiStickerScreen(
-    tab: String?,
+    tab: Int,
     guildId: String?,
     onEmojiPicked: (String) -> Unit,
     onStickerPicked: (String) -> Unit
