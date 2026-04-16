@@ -36,6 +36,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.zaffox.discordwear.api.*
 import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.zaffox.discordwear.R
 
 private const val INPUT_KEY = "message_input"
 
@@ -68,11 +71,20 @@ fun ChatScreen(
     var loading      by remember { mutableStateOf(messages.isEmpty()) }
     var sendError    by remember { mutableStateOf("") }
     var showPicker   by remember { mutableStateOf(false) }
+    var tab      by remember { mutableStateOf(0) } // 0 = emoji, 1 = stickers
 
     // Name lookup maps for mention rendering
     val currentUser by repo.currentUser.collectAsState()
     val guilds      by repo.guilds.collectAsState()
     val myId = currentUser?.id ?: currentUserId
+    val hasNitro = currentUser?.hasNitro ?: false
+    
+    val userNames = remember(messages) {
+        messages.flatMap { it.mentionedUsers + it.author } 
+                .associate { it.id to it.displayName } 
+    }
+    val channelNames = remember { repo.getChannelNames() } 
+
 
     LaunchedEffect(channelId) {
         if (messages.isEmpty()) {
@@ -110,6 +122,7 @@ fun ChatScreen(
     // ── Emoji/sticker picker overlay ──────────────────────────────────────────
     if (showPicker) {
         EmojiStickerScreen(
+            tab = tab,
             guildId = guildId,
             onEmojiPicked = { insertText ->
                 showPicker = false
@@ -144,6 +157,8 @@ fun ChatScreen(
                         msg         = messages[index],
                         isOwn       = messages[index].author.id == myId,
                         imageLoader = imageLoader,
+                        userNames = userNames, 
+                        channelNames = channelNames,
                         onReact     = { emoji ->
                             scope.launch { repo.toggleReaction(channelId, messages[index].id, emoji) }
                         }
@@ -157,9 +172,6 @@ fun ChatScreen(
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
-        }
-    }
-}
 
             // ── Action buttons ────────────────────────────────────────────────
             item {
@@ -170,11 +182,37 @@ fun ChatScreen(
                 ) { Text("Message #$channelName") }
             }
             item {
-                Button(
-                    onClick  = { showPicker = true },
-                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                    colors   = ButtonDefaults.filledTonalButtonColors()
-                ) { Text("😀  Emoji / Sticker") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly // Distributes space between buttons 
+                ) {
+                    FilledIconButton(
+                        onClick  = {
+                            showPicker = true
+                            tab = 0
+                        },
+                        modifier = Modifier.height(40.dp),
+                        //colors   = IconButtonDefaults.filledTonalButtonColors()
+                    ) {//!
+                        Icon(
+                           painter = painterResource(id = R.drawable.emoji),
+                            contentDescription = "Emoji" 
+                        )
+                    }//add emoji material icon
+                    FilledIconButton(
+                        onClick  = {
+                            showPicker = true
+                            tab = 1
+                        },
+                        modifier = Modifier.height(40.dp),
+                        //colors   = IconButtonDefaults.filledTonalButtonColors()
+                    ) { 
+                        Icon(
+                            painter = painterResource(id = R.drawable.sticker),
+                            contentDescription = "Stickers" 
+                        )
+                    } //add sticker material icon
+                }
             }
         }
     }
@@ -188,13 +226,15 @@ private fun MessageBubble(
     msg: DiscordMessage,
     isOwn: Boolean,
     imageLoader: ImageLoader,
+    userNames: Map<String, String>,//!
+    channelNames: Map<String, String>,//!
     onReact: (ReactionEmoji) -> Unit
 ) {
     val context = LocalContext.current
 
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
         if (!isOwn) {
@@ -203,7 +243,7 @@ private fun MessageBubble(
         }
 
         Column(
-            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start,
+            horizontalAlignment = Alignment.Start,
             modifier = Modifier.widthIn(max = 155.dp)
         ) {
             Text(
@@ -212,8 +252,22 @@ private fun MessageBubble(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            if (msg.content.isNotBlank()) {
-                MessageContent(content = msg.content, imageLoader = imageLoader, context = context)
+            if (msg.type == 19 && msg.referencedMessage != null) {//!
+                ReplyPreview(msg.referencedMessage, imageLoader, userNames) 
+            } 
+
+            if (msg.type == 23) {//!
+                ForwardPreview(msg, imageLoader, userNames) //!
+            } else {//!
+                if (msg.content.isNotBlank()) {
+                    MessageContent(
+                        content = msg.content,
+                        imageLoader = imageLoader,
+                        context = context,
+                        userNames = userNames,//!
+                        channelNames = channelNames//!
+                    )
+                }//!
             }
 
             msg.attachments.filter { it.isImage }.forEach { att ->
@@ -225,6 +279,7 @@ private fun MessageBubble(
             msg.embeds.forEach { embed ->
                 EmbedCard(embed, imageLoader)
             }
+            
 
             // Reactions row
             if (msg.reactions.isNotEmpty()) {
@@ -240,6 +295,75 @@ private fun MessageBubble(
     }
 }
 
+//!!
+@Composable 
+private fun ReplyPreview(
+    ref: DiscordMessage, 
+    imageLoader: ImageLoader, 
+    userNames: Map<String, String> 
+) {
+    val preview = when {
+        ref.content.isNotBlank() -> ref.content.take(60)
+        ref.stickers.isNotEmpty() -> "[Sticker: ${ref.stickers.first().name}]"
+        ref.attachments.isNotEmpty() -> "[Image]" else -> "[Message]" 
+    } 
+    Row(
+        modifier = Modifier
+            .fillMaxWidth() 
+            .background(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), 
+                shape = RoundedCornerShape(4.dp) 
+            ) 
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // Small avatar 
+        DiscordAvatar(url = ref.author.avatarUrl(16), imageLoader = imageLoader, size = 12.dp) 
+        Text( text = "${ref.author.displayName}: $preview", 
+             style = MaterialTheme.typography.bodyExtraSmall, 
+             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1 
+            ) 
+    } 
+    Spacer(Modifier.height(2.dp)) 
+}//!!
+
+@Composable
+private fun ForwardPreview(
+    msg: DiscordMessage, 
+    imageLoader: ImageLoader, 
+    userNames: Map<String, String> 
+) {
+    Column( 
+        modifier = Modifier 
+            .fillMaxWidth() 
+            .background( 
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(4.dp) 
+            ) 
+            .padding(6.dp) 
+    ) {
+        Text(
+            text = "â†ª Forwarded", 
+            style = MaterialTheme.typography.labelSmall, 
+            color = MaterialTheme.colorScheme.onSurfaceVariant 
+        ) 
+        if (msg.forwardedAuthor != null) {
+            Text(
+                text = msg.forwardedAuthor.displayName,
+                style = MaterialTheme.typography.labelSmall 
+            ) 
+        } 
+        if (!msg.forwardedContent.isNullOrBlank()) {
+            Text(
+                text = msg.forwardedContent,
+                style = MaterialTheme.typography.bodySmall,
+                //fontStyle = FontStyle.Italic 
+            ) 
+        } 
+    } 
+}
+
 // ── Content: text + mentions + emoji + links ──────────────────────────────────
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -247,10 +371,15 @@ private fun MessageBubble(
 private fun MessageContent(
     content: String,
     imageLoader: ImageLoader,
-    context: Context
+    context: Context,
+    userNames: Map<String, String>, 
+    channelNames: Map<String, String> = emptyMap()
 ) {
-    val parts = remember(content) { ContentParser.parse(content) }
-
+    val parts = remember(content, userNames, channelNames) {
+        ContentParser.parse(
+            content, userNames = userNames, channelNames = channelNames
+        ) 
+    }
     FlowRow(modifier = Modifier.fillMaxWidth()) {
         parts.forEach { part ->
             when (part) {
@@ -310,102 +439,8 @@ private fun MessageContent(
                         }
                     )
                 }
-                is ContentParser.Part.Link -> {
-                    val annotated = buildAnnotatedString {
-                        withStyle(SpanStyle(
-                            color          = MaterialTheme.colorScheme.primary,
-                            textDecoration = TextDecoration.Underline
-                        )) { append(part.url) }
-                    }
-                    Text(
-                        text     = annotated,
-                        style    = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.clickable {
-                            runCatching {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(part.url))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                context.startActivity(intent)
-                            }
-                        }
-                    )
-                }
             }
         }
-    }
-}
-
-// ── Reaction chip ─────────────────────────────────────────────────────────────
-
-@Composable
-private fun ReactionChip(reaction: Reaction, imageLoader: ImageLoader, onClick: () -> Unit) {
-    val bgColor = if (reaction.me)
-        MaterialTheme.colorScheme.primaryContainer
-    else
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-
-    Box(
-        modifier = Modifier
-            .height(22.dp)
-            .background(color = bgColor, shape = RoundedCornerShape(11.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            val imgUrl = reaction.emoji.imageUrl
-            if (imgUrl != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(imgUrl).crossfade(true).build(),
-                    imageLoader        = imageLoader,
-                    contentDescription = reaction.emoji.name,
-                    modifier           = Modifier.size(14.dp)
-                )
-            } else {
-                Text(reaction.emoji.name, fontSize = 12.sp)
-            }
-            Text(
-                text     = reaction.count.toString(),
-                style    = MaterialTheme.typography.labelSmall,
-                fontSize = 10.sp
-            )
-        }
-    }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-@Composable
-private fun MediaImage(url: String, contentDesc: String, imageLoader: ImageLoader, size: Dp = 120.dp) {
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(url).crossfade(true).build(),
-        imageLoader        = imageLoader,
-        contentDescription = contentDesc,
-        contentScale       = ContentScale.Fit,
-        modifier           = Modifier.padding(top = 2.dp).widthIn(max = size).heightIn(max = size)
-    )
-}
-
-@Composable
-private fun EmbedCard(embed: Embed, imageLoader: ImageLoader) {
-    val imgUrl = embed.displayImageUrl ?: return
-    Column(modifier = Modifier.padding(top = 2.dp)) {
-        embed.title?.let {
-            Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary)
-        }
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(imgUrl).crossfade(true).build(),
-            imageLoader        = imageLoader,
-            contentDescription = embed.title ?: "embed",
-            contentScale       = ContentScale.Fit,
-            modifier           = Modifier.widthIn(max = 140.dp).heightIn(max = 140.dp)
-        )
     }
 }
 
@@ -489,9 +524,9 @@ private fun DiscordAvatar(url: String, imageLoader: ImageLoader, size: Dp) {
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(url).crossfade(true).build(),
-        imageLoader        = imageLoader,
+        imageLoader = imageLoader,
         contentDescription = null,
-        contentScale       = ContentScale.Crop,
-        modifier           = Modifier.size(size)
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.size(size)//.clip(CircleShape) //make avatar circle
     )
 }
