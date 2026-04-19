@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp"
+    android:height="40dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <!-- Blurple background circle using a proper closed arc -->
+    <path
+        android:fillColor="#5865F2"
+        android:pathData="M50,0 A50,50,0,1,1,49.9999,0 Z"/>
+
+    <!-- Head circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,22 A16,16,0,1,1,49.9999,22 Z"/>
+
+    <!-- Body shoulders (quadratic bezier clipped naturally by circle) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M15,90 Q15,58 50,58 Q85,58 85,90 Z"/>
+
+</vector>

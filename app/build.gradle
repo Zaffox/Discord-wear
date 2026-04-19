@@ -1,0 +1,62 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.compose.compiler)
+}
+
+android {
+    namespace "com.zaffox.discordwear"
+    compileSdk 35
+
+    lint { //stupid lint keeps crashing 3:<
+        checkReleaseBuilds = false
+        abortOnError = false
+        disable "NullSafeMutableLiveData"
+    }
+
+    defaultConfig {
+        applicationId "com.zaffox.discordwear"
+        minSdk 30
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+    }
+
+    dexOptions {
+        preDexLibraries false
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    buildFeatures {
+        compose true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+        freeCompilerArgs += ["-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi"]
+    }
+}
+
+dependencies {
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.activity.compose
+    implementation libs.wear.compose.material3
+    implementation libs.wear.compose.foundation
+    implementation libs.wear.compose.navigation
+    implementation libs.kotlinx.coroutines
+    implementation libs.wear.input
+    implementation libs.okhttp
+    implementation libs.coil.compose
+    implementation libs.coil.gif
+    implementation "androidx.compose.material3:material3:1.3.1"
+}
