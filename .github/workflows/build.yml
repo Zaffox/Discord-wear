@@ -1,4 +1,4 @@
-name: Build DiscordWear
+name: Build DiscordWear Beta
 
 on:
   workflow_dispatch:
