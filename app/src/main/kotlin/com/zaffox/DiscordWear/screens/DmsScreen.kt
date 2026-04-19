@@ -95,12 +95,6 @@ private fun OnlineStatus.label(): String = when (this) {
     OnlineStatus.OFFLINE -> "Offline"
 }
 
-/** Returns the active platform icon string based on client_status, preferring mobile. */
-private fun ClientStatus.platformIcon(): String? = when {
-    mobile  != null && mobile  != OnlineStatus.OFFLINE -> "📱"// res/drawable/mobile
-    desktop != null && desktop != OnlineStatus.OFFLINE -> "🖥️"// res/drawable/desktop
-    else -> null
-}
 
 // ── DM Button ────────────────────────────────────────────────────────────────
 
@@ -203,7 +197,6 @@ private fun DmButton(
 
             // Text column
             Column(modifier = Modifier.weight(1f)) {
-                // Name + platform icon
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -217,9 +210,6 @@ private fun DmButton(
                         overflow   = TextOverflow.Ellipsis,
                         modifier   = Modifier.weight(1f, fill = false)
                     )
-                    presence?.clientStatus?.platformIcon()?.let { icon ->
-                        Text(icon, fontSize = 10.sp)
-                    }
                 }
 
                 // Status line: custom status text/emoji OR generic status label
