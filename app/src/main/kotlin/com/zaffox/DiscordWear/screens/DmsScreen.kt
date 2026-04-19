@@ -97,9 +97,8 @@ private fun OnlineStatus.label(): String = when (this) {
 
 /** Returns the active platform icon string based on client_status, preferring mobile. */
 private fun ClientStatus.platformIcon(): String? = when {
-    mobile  != null && mobile  != OnlineStatus.OFFLINE -> "📱"
-    desktop != null && desktop != OnlineStatus.OFFLINE -> "🖥️"
-    web     != null && web     != OnlineStatus.OFFLINE -> "🌐"
+    mobile  != null && mobile  != OnlineStatus.OFFLINE -> "📱"// res/drawable/mobile
+    desktop != null && desktop != OnlineStatus.OFFLINE -> "🖥️"// res/drawable/desktop
     else -> null
 }
 
