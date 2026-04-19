@@ -180,8 +180,8 @@ fun EmojiStickerScreen(
                                             painter = painterResource(id = R.drawable.lock),
                                             contentDescription = "Locked",
                                             modifier = Modifier
-                                                .size(14.dp)
-                                                .align(Alignment.BottomEnd)
+                                                .size(30.dp)
+                                                .align(Alignment.Center)
                                         )
                                     }
                                 }
