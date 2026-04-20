@@ -75,9 +75,9 @@ fun DmsScreen(
                         imageLoader  = imageLoader,
                         mentionCount = if (showBadges) readState[dm.id]?.mentionCount ?: 0 else 0,
                         hasUnread    = showBadges && dm.lastMessageId != null && run {
-                            val lastRead = readState[dm.id]?.lastMessageId
-                            // Unread if never opened (no readState entry) or last read is behind newest
-                            lastRead == null || dm.lastMessageId > lastRead
+                            val rs = readState[dm.id] ?: return@run false
+                            // Unread only if the channel's newest message is ahead of what was last read
+                            dm.lastMessageId > rs.lastMessageId
                         },
                         onClick      = { onNavigateToChatScreen(dm.id, dm.displayName) }
                     )
