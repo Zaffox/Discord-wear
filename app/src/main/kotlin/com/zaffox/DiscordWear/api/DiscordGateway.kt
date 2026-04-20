@@ -198,8 +198,8 @@ class DiscordGateway(private val token: String) {
                 sessionId = d.optString("session_id")
                 resumeUrl = d.optString("resume_gateway_url")
                 val user = runCatching { DiscordUser.fromJson(d.getJSONObject("user")) }.getOrNull()
-                // Parse read_state: array of {id (channelId), last_message_id, mention_count}
-                val readState = mutableMapOf<String, ChannelUnreadState>()
+                // Parse read_state: array of {id (channelId), last_message_id}
+                val readState = mutableMapOf<String, String>()
                 val rsArr = d.optJSONArray("read_state")
                     ?: d.optJSONObject("read_state")?.optJSONArray("entries")
                 if (rsArr != null) {
@@ -209,30 +209,14 @@ class DiscordGateway(private val token: String) {
                             val chId = rs.optString("id").takeIf { it.isNotEmpty() } ?: return@runCatching
                             val lastRead = rs.optString("last_message_id").takeIf { it.isNotEmpty() && it != "null" }
                                 ?: return@runCatching
-                            val mentionCount = rs.optInt("mention_count", 0)
-                            readState[chId] = ChannelUnreadState(lastRead, mentionCount)
+                            readState[chId] = lastRead
                         }
                     }
                 }
-                // Parse initial presences from private_channels relationships
-                val presences = mutableListOf<UserPresence>()
-                val presArr = d.optJSONArray("presences")
-                if (presArr != null) {
-                    for (i in 0 until presArr.length()) {
-                        runCatching { presences.add(UserPresence.fromJson(presArr.getJSONObject(i))) }
-                    }
-                }
-                if (user != null) GatewayEvent.Ready(user, readState, presences) else null
+                if (user != null) GatewayEvent.Ready(user, readState) else null
             }
             "MESSAGE_CREATE" -> runCatching {
-                val msg = DiscordMessage.fromJson(d)
-                val memberObj = d.optJSONObject("member")
-                val rolesArr  = memberObj?.optJSONArray("roles")
-                val roleIds   = if (rolesArr != null)
-                    (0 until rolesArr.length()).map { rolesArr.getString(it) }
-                else emptyList()
-                val guildId = d.optString("guild_id").takeIf { it.isNotEmpty() && it != "null" }
-                GatewayEvent.MessageCreate(msg, roleIds, guildId)
+                GatewayEvent.MessageCreate(DiscordMessage.fromJson(d))
             }.getOrNull()
             "MESSAGE_UPDATE" -> runCatching {
                 GatewayEvent.MessageUpdate(DiscordMessage.fromJson(d))
@@ -260,21 +244,10 @@ class DiscordGateway(private val token: String) {
                 )
             }.getOrNull()
             "TYPING_START" -> runCatching {
-                fun String.realOrNull() = takeIf { it.isNotEmpty() && it != "null" }
-                val memberObj   = d.optJSONObject("member")
-                val userObj     = memberObj?.optJSONObject("user") ?: d.optJSONObject("user")
-                val nick        = memberObj?.optString("nick")?.realOrNull()
-                val globalName  = userObj?.optString("global_name")?.realOrNull()
-                val username    = userObj?.optString("username")?.realOrNull()
-                val displayName = nick ?: globalName ?: username
                 GatewayEvent.TypingStart(
-                    channelId   = d.getString("channel_id"),
-                    userId      = d.getString("user_id"),
-                    displayName = displayName
+                    channelId = d.getString("channel_id"),
+                    userId    = d.getString("user_id")
                 )
-            }.getOrNull()
-            "PRESENCE_UPDATE" -> runCatching {
-                GatewayEvent.PresenceUpdate(UserPresence.fromJson(d))
             }.getOrNull()
             else -> GatewayEvent.Unknown(eventName)
         }
@@ -287,26 +260,25 @@ class DiscordGateway(private val token: String) {
     companion object {
         /**
          * Intents bitmask:
-         *  GUILDS (1) | GUILD_PRESENCES (256) | GUILD_MESSAGES (512) |
-         *  GUILD_MESSAGE_TYPING (2048) | DIRECT_MESSAGES (4096) |
-         *  DIRECT_MESSAGE_TYPING (8192) | MESSAGE_CONTENT (32768)
+         *  GUILDS (1) | GUILD_MESSAGES (512) | GUILD_MESSAGE_TYPING (2048) |
+         *  DIRECT_MESSAGES (4096) | DIRECT_MESSAGE_TYPING (8192) |
+         *  MESSAGE_CONTENT (32768)
          */
         private const val INTENTS =
-            (1 or 256 or 512 or 2048 or 4096 or 8192 or 32768)
+            (1 or 512 or 2048 or 4096 or 8192 or 32768)
     }
 }
 
 // ── Event sealed class ────────────────────────────────────────────────────────
 
 sealed class GatewayEvent {
-    /** [readState] maps channelId -> ChannelUnreadState from the READY payload. */
-    data class Ready(val user: DiscordUser, val readState: Map<String, ChannelUnreadState> = emptyMap(), val presences: List<UserPresence> = emptyList()) : GatewayEvent()
-    data class MessageCreate(val message: DiscordMessage, val memberRoleIds: List<String> = emptyList(), val guildId: String? = null) : GatewayEvent()
+    /** [readState] maps channelId -> last-read messageId from the READY payload. */
+    data class Ready(val user: DiscordUser, val readState: Map<String, String> = emptyMap()) : GatewayEvent()
+    data class MessageCreate(val message: DiscordMessage) : GatewayEvent()
     data class MessageUpdate(val message: DiscordMessage) : GatewayEvent()
     data class MessageDelete(val id: String, val channelId: String) : GatewayEvent()
     data class ReactionAdd(val messageId: String, val channelId: String, val userId: String, val emoji: ReactionEmoji) : GatewayEvent()
     data class ReactionRemove(val messageId: String, val channelId: String, val userId: String, val emoji: ReactionEmoji) : GatewayEvent()
-    data class TypingStart(val channelId: String, val userId: String, val displayName: String? = null) : GatewayEvent()
-    data class PresenceUpdate(val presence: UserPresence) : GatewayEvent()
+    data class TypingStart(val channelId: String, val userId: String) : GatewayEvent()
     data class Unknown(val name: String) : GatewayEvent()
 }

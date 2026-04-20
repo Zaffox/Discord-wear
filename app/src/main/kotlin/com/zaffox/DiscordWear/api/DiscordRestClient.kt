@@ -71,23 +71,35 @@ class DiscordRestClient(private val token: String) {
         filterInaccessible: Boolean = true
     ): Result<List<CategoryGroup>> = runCatching {
         val raw = Channel.listFromJson(JSONArray(get("/guilds/$guildId/channels")))
+        val member = getGuildMember(guildId).getOrNull()
+        val roles  = getGuildRoles(guildId).getOrNull()
 
-        // NOTE: Computing real per-channel permissions requires /guilds/{id}/members/@me
-        // (needs guilds.members.read OAuth scope) and /guilds/{id} (bot-only endpoint).
-        // Both reliably fail for user tokens. Rather than hiding all channels when
-        // permission data is unavailable, we mark everything accessible and skip filtering.
-        // The Discord API already omits channels the user cannot see from this endpoint,
-        // so the list is already pre-filtered server-side.
+        fun canView(channel: Channel): Boolean {
+            if (member == null || roles == null) return !filterInaccessible
+            val perms = Permissions.effectiveForMember(
+                member = member, guildId = guildId,
+                everyoneRoleId = guildId, roles = roles, channel = channel
+            )
+            return Permissions.has(perms, Permissions.VIEW_CHANNEL)
+        }
+
         val categories   = raw.filter { it.isCategory }.sortedBy { it.position }
-        val textChannels = raw.filter { it.isText }.map { it.copy(hasAccess = true) }
+        val textChannels = raw.filter { it.isText }
         val byParent     = textChannels.groupBy { it.parentId }
         val groups       = mutableListOf<CategoryGroup>()
 
-        val topLevel = byParent[null].orEmpty().sortedBy { it.position }
+        // Top-level accessible channels
+        val topLevel = byParent[null].orEmpty()
+            .map { it.copy(hasAccess = canView(it)) }
+            .filter { !filterInaccessible || it.hasAccess }
+            .sortedBy { it.position }
         if (topLevel.isNotEmpty()) groups.add(CategoryGroup(category = null, channels = topLevel))
 
         for (cat in categories) {
-            val children = byParent[cat.id].orEmpty().sortedBy { it.position }
+            val children = byParent[cat.id].orEmpty()
+                .map { it.copy(hasAccess = canView(it)) }
+                .filter { !filterInaccessible || it.hasAccess }
+                .sortedBy { it.position }
             if (children.isNotEmpty()) groups.add(CategoryGroup(category = cat, channels = children))
         }
 
