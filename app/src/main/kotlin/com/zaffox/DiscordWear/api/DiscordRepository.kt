@@ -476,6 +476,18 @@ class DiscordRepository(token: String, private val context: Context? = null) {
                             if (list.none { it.id == msg.id }) list.add(msg)
                             current + (msg.channelId to list)
                         }
+                        // Keep DM channel's lastMessageId current so unread detection works
+                        val isDmChannel = _dmChannels.value.any { it.id == msg.channelId }
+                        if (isDmChannel) {
+                            _dmChannels.update { channels ->
+                                channels.map { ch ->
+                                    if (ch.id == msg.channelId &&
+                                        (ch.lastMessageId == null || msg.id > ch.lastMessageId))
+                                        ch.copy(lastMessageId = msg.id)
+                                    else ch
+                                }
+                            }
+                        }
                         msg.guildId?.let { channelGuildCache[msg.channelId] = it }
                         if (myId != null && msg.author.id != myId) {
                             // Look up the user's roles for this guild for role-ping detection
