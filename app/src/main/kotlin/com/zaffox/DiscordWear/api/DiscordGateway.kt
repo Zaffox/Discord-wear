@@ -198,8 +198,8 @@ class DiscordGateway(private val token: String) {
                 sessionId = d.optString("session_id")
                 resumeUrl = d.optString("resume_gateway_url")
                 val user = runCatching { DiscordUser.fromJson(d.getJSONObject("user")) }.getOrNull()
-                // Parse read_state: array of {id (channelId), last_message_id}
-                val readState = mutableMapOf<String, String>()
+                // Parse read_state: array of {id (channelId), last_message_id, mention_count}
+                val readState = mutableMapOf<String, ChannelUnreadState>()
                 val rsArr = d.optJSONArray("read_state")
                     ?: d.optJSONObject("read_state")?.optJSONArray("entries")
                 if (rsArr != null) {
@@ -209,7 +209,8 @@ class DiscordGateway(private val token: String) {
                             val chId = rs.optString("id").takeIf { it.isNotEmpty() } ?: return@runCatching
                             val lastRead = rs.optString("last_message_id").takeIf { it.isNotEmpty() && it != "null" }
                                 ?: return@runCatching
-                            readState[chId] = lastRead
+                            val mentionCount = rs.optInt("mention_count", 0)
+                            readState[chId] = ChannelUnreadState(lastRead, mentionCount)
                         }
                     }
                 }
