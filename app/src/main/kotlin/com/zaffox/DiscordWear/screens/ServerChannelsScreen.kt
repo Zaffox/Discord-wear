@@ -16,7 +16,6 @@ import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
 import com.zaffox.discordwear.SetupPreferences
-import com.zaffox.discordwear.api.ChannelUnreadState
 import com.zaffox.discordwear.api.CategoryGroup
 import com.zaffox.discordwear.api.Channel
 import com.zaffox.discordwear.api.ChannelType
@@ -122,8 +121,11 @@ fun ServerChannels(
                             val ch = group.channels[idx]
                             val icon = channelIcon(ch, allChannels)
                             if (ch.hasAccess) {
-                                val unread = if (showMentionBadges) readState[ch.id] else null
-                                val mentionCount = unread?.mentionCount ?: 0
+                                val rs = if (showMentionBadges) readState[ch.id] else null
+                                val mentionCount = rs?.mentionCount ?: 0
+                                // Unread only when the channel has a newer message than what was last read
+                                val hasUnread = rs != null && ch.lastMessageId != null &&
+                                    ch.lastMessageId > rs.lastMessageId
                                 Button(
                                     modifier = Modifier.fillMaxWidth().height(36.dp),
                                     colors   = ButtonDefaults.filledTonalButtonColors(),
@@ -155,7 +157,7 @@ fun ServerChannels(
                                                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                                                 )
                                             }
-                                        } else if (unread != null) {
+                                        } else if (hasUnread) {
                                             // Unread dot (no ping)
                                             Box(
                                                 modifier = Modifier
@@ -183,4 +185,3 @@ fun ServerChannels(
         }
     }
 }
-
