@@ -8,7 +8,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -53,8 +56,17 @@ class DiscordRepository(token: String, private val context: Context? = null) {
      * channelId → last-read messageId, populated from the READY gateway event.
      * Used by ChatScreen to scroll to the first unread message.
      */
-    private val _readState = MutableStateFlow<Map<String, String>>(emptyMap())
-    val readState: StateFlow<Map<String, String>> = _readState.asStateFlow()
+    private val _readState = MutableStateFlow<Map<String, ChannelUnreadState>>(emptyMap())
+    val readState: StateFlow<Map<String, ChannelUnreadState>> = _readState.asStateFlow()
+
+    /** Total unread mention count across all channels. */
+    val totalMentionCount: StateFlow<Int> = kotlinx.coroutines.flow.MutableStateFlow(0).also { /* see below */ }.let {
+        // We derive this live from _readState in collectMentionCount()
+        _readState
+    }.let { MutableStateFlow(0) } // placeholder; real value comes from readState.map { it.values.sumOf { s -> s.mentionCount } }
+    // Real total mention count derived from readState
+    private val _totalMentions = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val totalMentions: StateFlow<Int> = _totalMentions.asStateFlow()
 
     // Emoji / sticker cache: guildId → list
     private val emojiCache  = mutableMapOf<String, List<GuildEmoji>>()
@@ -62,10 +74,100 @@ class DiscordRepository(token: String, private val context: Context? = null) {
 
     private val channelNameCache  = mutableMapOf<String, String>()
     private val channelGuildCache = mutableMapOf<String, String>()
+    // Typing timeout jobs: "channelId:userId" -> cancellable Job
+    private val typingJobs = mutableMapOf<String, Job>()
+    // slowmode: channelId -> last send timestamp (ms)
+    private val lastSentAt = mutableMapOf<String, Long>()
+
+    /**
+     * Returns how many seconds the user must wait before sending again in a slow-mode channel.
+     * Returns 0 if they can send immediately.
+     */
+    fun slowModeRemainingSeconds(channelId: String): Int {
+        val ch = channelCache[channelId] ?: return 0
+        val intervalMs = ch.slowModeSeconds * 1000L
+        if (intervalMs <= 0) return 0
+        val lastMs = lastSentAt[channelId] ?: return 0
+        val elapsed = System.currentTimeMillis() - lastMs
+        val remaining = intervalMs - elapsed
+        return if (remaining > 0) ((remaining + 999) / 1000).toInt() else 0
+    }
+
+    fun getSlowModeSeconds(channelId: String): Int =
+        channelCache[channelId]?.slowModeSeconds ?: 0
+
+    // userId -> display name, populated from TYPING_START and message authors
+    private val userDisplayNames = mutableMapOf<String, String>()
+
+    // guildId -> current user's role IDs, populated from MESSAGE_CREATE member data
+    private val myRolesByGuild = mutableMapOf<String, List<String>>()
+
+    // channelId -> CategoryGroup channel object, rebuilt whenever channels are cached
+    private val channelCache = mutableMapOf<String, Channel>()
+
+    // userId -> UserPresence, populated from READY and PRESENCE_UPDATE
+    private val _presences = MutableStateFlow<Map<String, UserPresence>>(emptyMap())
+    val presences: StateFlow<Map<String, UserPresence>> = _presences.asStateFlow()
+
+    fun getPresence(userId: String): UserPresence? = _presences.value[userId]
 
     val gatewayEvents = gateway.events
 
     fun getChannelNames(): Map<String, String> = channelNameCache.toMap()
+
+    /**
+     * Returns true if the current user can send messages in [channelId].
+     * Uses cached channel permission overwrites with known role data.
+     * Announcement channels (GUILD_NEWS) are always read-only.
+     * Falls back to true (optimistic) when data is unavailable.
+     */
+    fun canSendMessage(channelId: String): Boolean {
+        val channel = channelCache[channelId] ?: return true
+        // Announcement channels are always read-only for non-admins
+        if (channel.type == ChannelType.GUILD_NEWS) return false
+        val guildId = channel.guildId ?: return true
+        val overwrites = channel.permissionOverwrites
+        if (overwrites.isEmpty()) return true
+
+        var allow = 0L
+        var deny  = 0L
+
+        // @everyone overwrite (type=0, id == guildId)
+        overwrites.firstOrNull { it.type == 0 && it.id == guildId }?.let {
+            deny  = deny  or it.deny
+            allow = allow or it.allow
+        }
+
+        // Role overwrites for the user's known roles in this guild
+        val myRoles = myRolesByGuild[guildId] ?: emptyList()
+        for (ow in overwrites.filter { it.type == 0 && it.id in myRoles }) {
+            deny  = deny  or ow.deny
+            allow = allow or ow.allow
+        }
+
+        // If explicitly allowed by a role overwrite, trust it
+        if (allow and Permissions.SEND_MESSAGES != 0L) return true
+        // If denied, block
+        if (deny  and Permissions.SEND_MESSAGES != 0L) return false
+        // Otherwise assume allowed (Discord defaults to allow for visible channels)
+        return true
+    }
+
+    /** Returns a StateFlow of user IDs currently typing in [channelId]. */
+    fun typingInChannel(channelId: String): StateFlow<Set<String>> =
+        // Map the whole typing map to just this channel's set.
+        // stateIn would be ideal but requires a scope — instead expose a derived
+        // flow that ChatScreen subscribes to directly.
+        object : StateFlow<Set<String>> {
+            override val value: Set<String>
+                get() = _typing.value[channelId] ?: emptySet()
+            override val replayCache: List<Set<String>>
+                get() = listOf(value)
+            override suspend fun collect(collector: kotlinx.coroutines.flow.FlowCollector<Set<String>>): Nothing {
+                _typing.map { it[channelId] ?: emptySet() }.collect(collector)
+                error("unreachable")
+            }
+        }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -78,6 +180,22 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     }
 
     fun disconnect() = gateway.disconnect()
+
+    /**
+     * Called when the app returns to foreground after being backgrounded.
+     * Re-fetches messages for any channel that was actively viewed so new
+     * messages sent while the app was paused appear immediately.
+     */
+    fun refreshOnResume(activeChannelId: String?) {
+        scope.launch {
+            // Refresh DM list in case new DMs arrived
+            runCatching { refreshDmChannels() }
+            // Re-load messages for the active channel
+            if (activeChannelId != null) {
+                runCatching { loadMessages(activeChannelId) }
+            }
+        }
+    }
 
     // ── Refresh helpers ───────────────────────────────────────────────────────
 
@@ -104,7 +222,12 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     }
 
     fun cacheChannelNames(groups: List<CategoryGroup>) {
-        groups.forEach { g -> g.channels.forEach { ch -> channelNameCache[ch.id] = ch.name } }
+        groups.forEach { g ->
+            g.channels.forEach { ch ->
+                channelNameCache[ch.id] = ch.name
+                channelCache[ch.id] = ch
+            }
+        }
     }
 
     /** Returns cached emojis immediately, fetches fresh copy if not cached. */
@@ -160,30 +283,61 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         prefs?.edit()?.putString("channels_$guildId", JSONArray(allChannels.map { it.toJson() }).toString())?.apply()
     }
 
-    /** Fetch messages for a channel and cache them. */
-    /** Mark a channel as read up to [messageId] (updates local read state). */
+    // Track which channels have had a full REST history load
+    private val loadedChannels = mutableSetOf<String>()
+
+    /**
+     * Fetch message history for a channel from REST and merge with any live
+     * gateway messages that arrived before or after the fetch.
+     * Always performs the REST call — never skips based on existing state.
+     */
+    /**
+     * Mark [channelId] as read up to [messageId].
+     * Updates the local [readState] immediately (so the UI dot/badge clears at once),
+     * then fires the REST ack in the background so Discord's servers agree.
+     * The read pointer is only advanced — it never goes backwards.
+     */
     fun markChannelRead(channelId: String, messageId: String) {
-        _readState.update { current ->
+        val advanced = _readState.updateAndGet { current ->
             val existing = current[channelId]
-            // Only advance the read pointer, never go backwards
-            if (existing == null || messageId > existing) {
-                current + (channelId to messageId)
+            if (existing == null || messageId > existing.lastMessageId) {
+                current + (channelId to ChannelUnreadState(lastMessageId = messageId, mentionCount = 0))
             } else current
+        }
+        // Only send the REST ack if we actually advanced the pointer
+        val updated = advanced[channelId]
+        if (updated?.lastMessageId == messageId) {
+            scope.launch { rest.ackChannel(channelId, messageId) }
         }
     }
 
     suspend fun loadMessages(channelId: String) {
-        rest.getMessages(channelId).onSuccess { msgs ->
-            val ordered = msgs.reversed()
-            _messages.update { it + (channelId to ordered) }
-            // Mark the channel as read up to the latest message we just loaded
-            ordered.lastOrNull()?.id?.let { markChannelRead(channelId, it) }
+        rest.getMessages(channelId).onSuccess { fetched ->
+            val fetchedList = fetched.reversed() // oldest-first
+            // Cache all author names so typing indicator can resolve them
+            fetchedList.forEach { userDisplayNames[it.author.id] = it.author.displayName }
+            _messages.update { current ->
+                val existing = current[channelId].orEmpty()
+                // Keep any gateway messages newer than the last REST-fetched message
+                val lastFetchedId = fetchedList.lastOrNull()?.id ?: ""
+                val newOnly = existing.filter { it.id > lastFetchedId }
+                current + (channelId to (fetchedList + newOnly))
+            }
+            loadedChannels.add(channelId)
+            // Mark the channel as read up to the newest message we just loaded
+            fetchedList.lastOrNull()?.id?.let { markChannelRead(channelId, it) }
         }
     }
+
+    /** Resolve a userId to a display name for the typing indicator. */
+    fun getDisplayName(userId: String): String? = userDisplayNames[userId]
+
+    fun isChannelLoaded(channelId: String) = channelId in loadedChannels
 
     suspend fun sendMessage(channelId: String, content: String): Result<DiscordMessage> {
         val result = rest.sendMessage(channelId, content)
         result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
                 if (list.none { it.id == msg.id }) list.add(msg)
@@ -196,6 +350,7 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     suspend fun sendSticker(channelId: String, stickerId: String): Result<DiscordMessage> {
         val result = rest.sendSticker(channelId, stickerId)
         result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
                 if (list.none { it.id == msg.id }) list.add(msg)
@@ -208,6 +363,7 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     suspend fun sendReply(channelId: String, content: String, replyToId: String): Result<DiscordMessage> {
         val result = rest.sendReply(channelId, content, replyToId)
         result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
                 if (list.none { it.id == msg.id }) list.add(msg)
@@ -246,16 +402,23 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         val existing = msg.reactions.firstOrNull { it.emoji.apiKey == emoji.apiKey }
         if (existing?.me == true) {
             rest.removeReaction(channelId, messageId, emoji.apiKey)
-            updateReactionLocally(channelId, messageId, emoji, delta = -1, me = false)
+            updateReactionLocally(channelId, messageId, emoji, delta = -1, me = false) // own remove
         } else {
             rest.addReaction(channelId, messageId, emoji.apiKey)
             updateReactionLocally(channelId, messageId, emoji, delta = +1, me = true)
         }
     }
 
+    /**
+     * [me] — whether the *current user's* reaction state changes:
+     *   ReactionAdd by me      → me = true
+     *   ReactionAdd by other   → me = null (preserve existing)
+     *   ReactionRemove by me   → me = false
+     *   ReactionRemove by other → me = null (preserve existing)
+     */
     private fun updateReactionLocally(
         channelId: String, messageId: String,
-        emoji: ReactionEmoji, delta: Int, me: Boolean
+        emoji: ReactionEmoji, delta: Int, me: Boolean?
     ) {
         _messages.update { current ->
             val list = current[channelId]?.map { msg ->
@@ -263,12 +426,16 @@ class DiscordRepository(token: String, private val context: Context? = null) {
                 val existing = msg.reactions.firstOrNull { it.emoji.apiKey == emoji.apiKey }
                 val newReactions = if (existing != null) {
                     val newCount = existing.count + delta
+                    // null means "don't change the me flag" (another user reacted/unreacted)
+                    val newMe = me ?: existing.me
                     if (newCount <= 0) msg.reactions.filter { it.emoji.apiKey != emoji.apiKey }
                     else msg.reactions.map {
-                        if (it.emoji.apiKey == emoji.apiKey) it.copy(count = newCount, me = me) else it
+                        if (it.emoji.apiKey == emoji.apiKey) it.copy(count = newCount, me = newMe) else it
                     }
                 } else {
-                    msg.reactions + Reaction(emoji, 1, me = true)
+                    // Brand new reaction — only add if delta is positive
+                    if (delta > 0) msg.reactions + Reaction(emoji, 1, me = me == true)
+                    else msg.reactions // ignore spurious remove for unknown reaction
                 }
                 msg.copy(reactions = newReactions)
             } ?: return@update current
@@ -287,25 +454,45 @@ class DiscordRepository(token: String, private val context: Context? = null) {
                         currentUserId = event.user.id
                         if (event.readState.isNotEmpty()) {
                             _readState.value = event.readState
+                            _totalMentions.value = event.readState.values.sumOf { it.mentionCount }
+                        }
+                        if (event.presences.isNotEmpty()) {
+                            _presences.value = event.presences
+                                .filter { it.userId.isNotEmpty() }
+                                .associateBy { it.userId }
                         }
                     }
 
                     is GatewayEvent.MessageCreate -> {
                         val msg = event.message
+                        // Cache author name for typing indicator display
+                        userDisplayNames[msg.author.id] = msg.author.displayName
+                        // Cache the current user's roles for this guild from the member object
+                        val myId = currentUserId
+                        if (myId != null && msg.author.id == myId &&
+                            event.guildId != null && event.memberRoleIds.isNotEmpty()) {
+                            myRolesByGuild[event.guildId] = event.memberRoleIds
+                        }
                         _messages.update { current ->
-                            val list = current[msg.channelId]?.toMutableList() ?: return@update current
+                            // Always append — do NOT drop messages for channels not yet loaded.
+                            // loadMessages() will merge/overwrite with the full REST fetch later.
+                            val list = current[msg.channelId]?.toMutableList() ?: mutableListOf()
                             if (list.none { it.id == msg.id }) list.add(msg)
                             current + (msg.channelId to list)
                         }
                         msg.guildId?.let { channelGuildCache[msg.channelId] = it }
-                        val myId = currentUserId
-                        if (myId != null && msg.author.id != myId && msg.pingFor(myId)) {
-                            val channelName = channelNameCache[msg.channelId] ?: msg.channelId
-                            val guildName   = msg.guildId?.let { gid ->
-                                _guilds.value.firstOrNull { it.id == gid }?.name
-                            }
-                            _pings.update { current ->
-                                (listOf(Ping(msg, channelName, guildName)) + current).take(5)
+                        if (myId != null && msg.author.id != myId) {
+                            // Look up the user's roles for this guild for role-ping detection
+                            val guildId = event.guildId ?: msg.guildId
+                            val memberRoles = if (guildId != null) myRolesByGuild[guildId] ?: emptyList() else emptyList()
+                            if (msg.pingFor(myId, memberRoles)) {
+                                val channelName = channelNameCache[msg.channelId] ?: msg.channelId
+                                val guildName   = msg.guildId?.let { gid ->
+                                    _guilds.value.firstOrNull { it.id == gid }?.name
+                                }
+                                _pings.update { current ->
+                                    (listOf(Ping(msg, channelName, guildName)) + current).take(5)
+                                }
                             }
                         }
                         _typing.update { current ->
@@ -313,6 +500,10 @@ class DiscordRepository(token: String, private val context: Context? = null) {
                             if (users.isEmpty()) current - msg.channelId
                             else current + (msg.channelId to users)
                         }
+                        // Cancel the auto-clear job for this user since they sent a message
+                        val typingKey = "${msg.channelId}:${msg.author.id}"
+                        typingJobs[typingKey]?.cancel()
+                        typingJobs.remove(typingKey)
                     }
 
                     is GatewayEvent.MessageUpdate -> {
@@ -334,17 +525,43 @@ class DiscordRepository(token: String, private val context: Context? = null) {
                     }
 
                     is GatewayEvent.ReactionAdd -> {
-                        updateReactionLocally(event.channelId, event.messageId, event.emoji, +1, event.userId == currentUserId)
+                        val isMe = event.userId == currentUserId
+                        // If it's our reaction: me=true. If someone else's: null (preserve existing me)
+                        updateReactionLocally(event.channelId, event.messageId, event.emoji, +1, if (isMe) true else null)
                     }
 
                     is GatewayEvent.ReactionRemove -> {
-                        updateReactionLocally(event.channelId, event.messageId, event.emoji, -1, false)
+                        val isMe = event.userId == currentUserId
+                        // If our reaction removed: me=false. If someone else's: null (preserve existing me)
+                        updateReactionLocally(event.channelId, event.messageId, event.emoji, -1, if (isMe) false else null)
                     }
 
                     is GatewayEvent.TypingStart -> {
-                        _typing.update { current ->
-                            val users = (current[event.channelId] ?: emptySet()) + event.userId
-                            current + (event.channelId to users)
+                        // Cache display name if provided by the event
+                        event.displayName?.let { userDisplayNames[event.userId] = it }
+                        // Use a simple value copy to guarantee StateFlow sees a new reference
+                        val updated = _typing.value.toMutableMap()
+                        val users = (updated[event.channelId] ?: emptySet()) + event.userId
+                        updated[event.channelId] = users
+                        _typing.value = updated.toMap()
+                        // Auto-clear after 10 seconds (Discord's typing indicator duration)
+                        val key = "${event.channelId}:${event.userId}"
+                        typingJobs[key]?.cancel()
+                        typingJobs[key] = scope.launch {
+                            delay(10_000)
+                            _typing.update { current ->
+                                val users = current[event.channelId].orEmpty() - event.userId
+                                if (users.isEmpty()) current - event.channelId
+                                else current + (event.channelId to users)
+                            }
+                            typingJobs.remove(key)
+                        }
+                    }
+
+                    is GatewayEvent.PresenceUpdate -> {
+                        val p = event.presence
+                        if (p.userId.isNotEmpty()) {
+                            _presences.update { current -> current + (p.userId to p) }
                         }
                     }
 

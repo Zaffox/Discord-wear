@@ -11,51 +11,150 @@ data class DiscordUser(
     val discriminator: String,
     val globalName: String?,
     val avatarHash: String?,
-    val premiumType: Int = 0
+    val premiumType: Int = 0,
+    val nameplateAsset: String? = null,   // e.g. "nameplates/nameplates/twilight/"
+    val avatarDecorationSkuId: String? = null  // profile picture decoration SKU
 ) {
     val hasNitro: Boolean get() = premiumType > 0
     val displayName: String get() = globalName ?: username
-    fun avatarUrl(size: Int = 64): String =
+    fun avatarUrl(size: Int = 64): String? =
         if (avatarHash != null)
             "https://cdn.discordapp.com/avatars/$id/$avatarHash.png?size=$size"
-        else
-            "https://cdn.discordapp.com/embed/avatars/${(id.toLongOrNull() ?: 0L) % 5}.png"
+        else null
+
+    /** Full CDN URL for the nameplate background image, or null if none. */
+    fun nameplateUrl(): String? =
+        if (nameplateAsset != null)
+            //"https://cdn.discordapp.com/${nameplateAsset}nameplate.png"
+            "https://cdn.discordapp.com/media/v1/collectibles-shop/${nameplateAsset}/static"
+        else null
+
+    /**
+     * Full CDN URL for the avatar decoration overlay image (static PNG), or null if none.
+     * Uses the same collectibles-shop CDN pattern as nameplates.
+     */
+    fun avatarDecorationUrl(): String? =
+        if (avatarDecorationSkuId != null)
+            "https://cdn.discordapp.com/media/v1/collectibles-shop/${avatarDecorationSkuId}/static"
+        else null
 
     companion object {
         fun fromJson(o: JSONObject) = DiscordUser(
-            id            = o.getString("id"),
-            username      = o.getString("username"),
-            discriminator = o.optString("discriminator", "0"),
-            globalName    = o.optString("global_name").takeIf { it.isNotEmpty() },
-            avatarHash    = o.optString("avatar").takeIf { it.isNotEmpty() },
-            premiumType   = o.optInt("premium_type", 0)
+            id             = o.getString("id"),
+            username       = o.optString("username").takeIf { it.isNotEmpty() && it != "null" } ?: "Unknown",
+            discriminator  = o.optString("discriminator", "0"),
+            globalName     = o.optString("global_name").takeIf { it.isNotEmpty() && it != "null" },
+            avatarHash     = o.optString("avatar").takeIf   { it.isNotEmpty() && it != "null" },
+            premiumType    = o.optInt("premium_type", 0),
+            nameplateAsset = o.optJSONObject("collectibles")
+                              ?.optJSONObject("nameplate")
+                              ?.optString("sku_id")
+                              ?.takeIf { it.isNotEmpty() && it != "null" }
+                              ?: o.optString("nameplate_asset").takeIf { it.isNotEmpty() && it != "null" },
+            avatarDecorationSkuId =
+                o.optJSONObject("collectibles")
+                  ?.optJSONObject("avatar_decoration")
+                  ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" }
+                ?: o.optJSONObject("avatar_decoration_data")
+                    ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" }
         )
     }
 }
 
-// ── Guild (Server) ────────────────────────────────────────────────────────────
+// ── Presence ──────────────────────────────────────────────────────────────────
+
+enum class OnlineStatus { ONLINE, IDLE, DND, INVISIBLE, OFFLINE }
+
+data class ClientStatus(
+    val desktop: OnlineStatus? = null,
+    val mobile:  OnlineStatus? = null,
+    val web:     OnlineStatus? = null
+)
+
+data class UserPresence(
+    val userId: String,
+    val status: OnlineStatus = OnlineStatus.OFFLINE,
+    val clientStatus: ClientStatus = ClientStatus(),
+    val customStatusText: String? = null,
+    val customStatusEmoji: String? = null  // unicode char or CDN URL for custom emoji
+) {
+    companion object {
+        private fun parseStatus(s: String?) = when (s) {
+            "online"    -> OnlineStatus.ONLINE
+            "idle"      -> OnlineStatus.IDLE
+            "dnd"       -> OnlineStatus.DND
+            "invisible" -> OnlineStatus.INVISIBLE
+            else        -> OnlineStatus.OFFLINE
+        }
+
+        fun fromJson(o: JSONObject): UserPresence {
+            val userId = o.optJSONObject("user")?.optString("id") ?: return UserPresence("")
+            val status = parseStatus(o.optString("status"))
+            val cs = o.optJSONObject("client_status")
+            val clientStatus = ClientStatus(
+                desktop = parseStatus(cs?.optString("desktop")),
+                mobile  = parseStatus(cs?.optString("mobile")),
+                web     = parseStatus(cs?.optString("web"))
+            )
+            // Find custom status activity (type == 4)
+            val activities = o.optJSONArray("activities")
+            var customText: String? = null
+            var customEmoji: String? = null
+            if (activities != null) {
+                for (i in 0 until activities.length()) {
+                    val act = activities.getJSONObject(i)
+                    if (act.optInt("type") == 4) {
+                        customText  = act.optString("state").takeIf { it.isNotEmpty() && it != "null" }
+                        val emojiObj = act.optJSONObject("emoji")
+                        customEmoji = if (emojiObj != null) {
+                            val eid = emojiObj.optString("id").takeIf { it.isNotEmpty() && it != "null" }
+                            if (eid != null) {
+                                val animated = emojiObj.optBoolean("animated", false)
+                                val ext = if (animated) "gif" else "webp"
+                                "https://cdn.discordapp.com/emojis/$eid.$ext?size=16"
+                            } else {
+                                emojiObj.optString("name").takeIf { it.isNotEmpty() && it != "null" }
+                            }
+                        } else null
+                        break
+                    }
+                }
+            }
+            return UserPresence(userId, status, clientStatus, customText, customEmoji)
+        }
+    }
+}
+
+
 
 data class Guild(
     val id: String,
     val name: String,
-    val iconHash: String?
+    val iconHash: String?,
+    val bannerHash: String? = null
 ) {
-    fun iconUrl(size: Int = 64): String =
+    fun iconUrl(size: Int = 64): String? =
         if (iconHash != null)
             "https://cdn.discordapp.com/icons/$id/$iconHash.png?size=$size"
-        else
-            "https://cdn.discordapp.com/embed/avatars/0.png"
+        else null
+
+    fun bannerUrl(size: Int = 480): String? =
+        if (bannerHash != null)
+            "https://cdn.discordapp.com/banners/$id/$bannerHash.png?size=$size"
+        else null
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
         .put("name", name)
         .put("icon", iconHash ?: "")
+        .put("banner", bannerHash ?: "")
 
     companion object {
         fun fromJson(o: JSONObject) = Guild(
-            id       = o.getString("id"),
-            name     = o.getString("name"),
-            iconHash = o.optString("icon").takeIf { it.isNotEmpty() }
+            id         = o.getString("id"),
+            name       = o.getString("name"),
+            iconHash   = o.optString("icon").takeIf   { it.isNotEmpty() && it != "null" },
+            bannerHash = o.optString("banner").takeIf { it.isNotEmpty() && it != "null" }
         )
         fun listFromJson(arr: JSONArray): List<Guild> =
             (0 until arr.length()).map { fromJson(arr.getJSONObject(it)) }
@@ -175,7 +274,8 @@ data class Channel(
     val permissionOverwrites: List<PermissionOverwrite> = emptyList(),
     val recipients: List<DiscordUser> = emptyList(),
     /** Whether the current user has VIEW_CHANNEL permission. Default true (unknown). */
-    val hasAccess: Boolean = true
+    val hasAccess: Boolean = true,
+    val slowModeSeconds: Int = 0  // 0 = no slow mode
 ) {
     val isDm: Boolean       get() = type == ChannelType.DM || type == ChannelType.GROUP_DM
     val isText: Boolean     get() = type == ChannelType.GUILD_TEXT || type == ChannelType.GUILD_NEWS
@@ -195,10 +295,10 @@ data class Channel(
         .put("last_message_id", lastMessageId ?: "")
         .put("parent_id", parentId ?: "")
         .put("position", position)
-        .put("has_access", hasAccess)
         .put("recipients", JSONArray(recipients.map { u ->
             JSONObject().put("id", u.id).put("username", u.username)
                 .put("global_name", u.globalName ?: "").put("avatar", u.avatarHash ?: "")
+                .put("nameplate_asset", u.nameplateAsset ?: "")
         }))
 
     companion object {
@@ -224,7 +324,7 @@ data class Channel(
                 position             = o.optInt("position", 0),
                 permissionOverwrites = overwrites,
                 recipients           = recipients,
-                hasAccess            = o.optBoolean("has_access", true)
+                slowModeSeconds      = o.optInt("rate_limit_per_user", 0)
             )
         }
         fun listFromJson(arr: JSONArray): List<Channel> =
@@ -251,6 +351,14 @@ data class Attachment(
     val isImage: Boolean get() = contentType?.startsWith("image/") == true
         || filename.lowercase().let { it.endsWith(".png") || it.endsWith(".jpg")
             || it.endsWith(".jpeg") || it.endsWith(".gif") || it.endsWith(".webp") }
+
+    val isVideo: Boolean get() = contentType?.startsWith("video/") == true
+        || filename.lowercase().let { it.endsWith(".mp4") || it.endsWith(".mov")
+            || it.endsWith(".webm") || it.endsWith(".mkv") || it.endsWith(".avi") }
+
+    val isAudio: Boolean get() = contentType?.startsWith("audio/") == true
+        || filename.lowercase().let { it.endsWith(".mp3") || it.endsWith(".ogg")
+            || it.endsWith(".wav") || it.endsWith(".flac") || it.endsWith(".m4a") }
 
     companion object {
         fun fromJson(o: JSONObject) = Attachment(
@@ -328,6 +436,14 @@ data class StickerItem(
     }
 }
 
+// ── Unread / mention state ──────────────────────────────────────────────────
+
+/** Unread state for one channel: last read message ID + unread mention count. */
+data class ChannelUnreadState(
+    val lastMessageId: String,
+    val mentionCount: Int = 0
+)
+
 // ── Content parser ────────────────────────────────────────────────────────────
 
 object ContentParser {
@@ -339,6 +455,54 @@ object ContentParser {
         data class RoleMention(val roleId: String, val roleName: String) : Part()
         data class ChannelMention(val channelId: String, val channelName: String) : Part()
         data class Link(val url: String) : Part()
+    }
+
+    /** Markdown span tokens: bold, italic, strikethrough, inline code, spoiler */
+    data class MarkdownSpan(
+        val text: String,
+        val bold: Boolean = false,
+        val italic: Boolean = false,
+        val strikethrough: Boolean = false,
+        val code: Boolean = false,
+        val spoiler: Boolean = false
+    )
+
+    /**
+     * Parse a plain-text string into markdown spans.
+     * Handles: **bold**, *italic*, __underline__, ~~strike~~, `code`, ||spoiler||
+     */
+    fun parseMarkdown(text: String): List<MarkdownSpan> {
+        if (text.isBlank()) return listOf(MarkdownSpan(text))
+        val spans = mutableListOf<MarkdownSpan>()
+        val regex = Regex(
+            """(\*\*(.+?)\*\*)""" +          // **bold**
+            """|(\*(.+?)\*)""" +              // *italic*
+            """|(~~(.+?)~~)""" +               // ~~strike~~
+            """|(```.+?```)|(`(.+?)`)""" +     // ```block``` or `code`
+            """|(\|\|(.+?)\|\|)""" +          // ||spoiler||
+            """|(_{2}(.+?)_{2})""",            // __underline__ (bold)
+            setOf(RegexOption.DOT_MATCHES_ALL)
+        )
+        var cursor = 0
+        for (match in regex.findAll(text)) {
+            if (match.range.first > cursor) {
+                spans += MarkdownSpan(text.substring(cursor, match.range.first))
+            }
+            val raw = match.value
+            when {
+                raw.startsWith("**") -> spans += MarkdownSpan(match.groupValues[2], bold = true)
+                raw.startsWith("*")  -> spans += MarkdownSpan(match.groupValues[4], italic = true)
+                raw.startsWith("~~") -> spans += MarkdownSpan(match.groupValues[6], strikethrough = true)
+                raw.startsWith("```") -> spans += MarkdownSpan(raw.removeSurrounding("```"), code = true)
+                raw.startsWith("`")   -> spans += MarkdownSpan(match.groupValues[9], code = true)
+                raw.startsWith("||") -> spans += MarkdownSpan(match.groupValues[11], spoiler = true)
+                raw.startsWith("__") -> spans += MarkdownSpan(match.groupValues[13], bold = true)
+                else -> spans += MarkdownSpan(raw)
+            }
+            cursor = match.range.last + 1
+        }
+        if (cursor < text.length) spans += MarkdownSpan(text.substring(cursor))
+        return spans.filter { it.text.isNotEmpty() }
     }
 
     private val TOKEN_RE = Regex(
@@ -417,7 +581,9 @@ data class ReactionEmoji(
 
     companion object {
         fun fromJson(o: JSONObject) = ReactionEmoji(
-            id       = o.optString("id").takeIf { it.isNotEmpty() },
+            // Discord sends id as JSON null (or the literal string "null") for unicode emoji.
+            // optString() converts JSON null to the string "null" — filter both cases out.
+            id       = o.optString("id").takeIf { it.isNotEmpty() && it != "null" },
             name     = o.optString("name").ifEmpty { "?" },
             animated = o.optBoolean("animated", false)
         )

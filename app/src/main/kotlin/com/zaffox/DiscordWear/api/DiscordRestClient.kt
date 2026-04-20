@@ -71,35 +71,23 @@ class DiscordRestClient(private val token: String) {
         filterInaccessible: Boolean = true
     ): Result<List<CategoryGroup>> = runCatching {
         val raw = Channel.listFromJson(JSONArray(get("/guilds/$guildId/channels")))
-        val member = getGuildMember(guildId).getOrNull()
-        val roles  = getGuildRoles(guildId).getOrNull()
 
-        fun canView(channel: Channel): Boolean {
-            if (member == null || roles == null) return !filterInaccessible
-            val perms = Permissions.effectiveForMember(
-                member = member, guildId = guildId,
-                everyoneRoleId = guildId, roles = roles, channel = channel
-            )
-            return Permissions.has(perms, Permissions.VIEW_CHANNEL)
-        }
-
+        // NOTE: Computing real per-channel permissions requires /guilds/{id}/members/@me
+        // (needs guilds.members.read OAuth scope) and /guilds/{id} (bot-only endpoint).
+        // Both reliably fail for user tokens. Rather than hiding all channels when
+        // permission data is unavailable, we mark everything accessible and skip filtering.
+        // The Discord API already omits channels the user cannot see from this endpoint,
+        // so the list is already pre-filtered server-side.
         val categories   = raw.filter { it.isCategory }.sortedBy { it.position }
-        val textChannels = raw.filter { it.isText }
+        val textChannels = raw.filter { it.isText }.map { it.copy(hasAccess = true) }
         val byParent     = textChannels.groupBy { it.parentId }
         val groups       = mutableListOf<CategoryGroup>()
 
-        // Top-level accessible channels
-        val topLevel = byParent[null].orEmpty()
-            .map { it.copy(hasAccess = canView(it)) }
-            .filter { !filterInaccessible || it.hasAccess }
-            .sortedBy { it.position }
+        val topLevel = byParent[null].orEmpty().sortedBy { it.position }
         if (topLevel.isNotEmpty()) groups.add(CategoryGroup(category = null, channels = topLevel))
 
         for (cat in categories) {
-            val children = byParent[cat.id].orEmpty()
-                .map { it.copy(hasAccess = canView(it)) }
-                .filter { !filterInaccessible || it.hasAccess }
-                .sortedBy { it.position }
+            val children = byParent[cat.id].orEmpty().sortedBy { it.position }
             if (children.isNotEmpty()) groups.add(CategoryGroup(category = cat, channels = children))
         }
 
@@ -180,6 +168,20 @@ class DiscordRestClient(private val token: String) {
         execute(buildRequest("/channels/$channelId/messages/$messageId/reactions/$encoded/@me")
             .delete().build())
         Unit
+    }
+
+    /**
+     * Acknowledge (mark as read) a channel up to [messageId].
+     * Uses Discord's undocumented but stable ack endpoint used by all official clients.
+     * Silently ignores failures — a missing ack just means the badge stays until next launch.
+     */
+    suspend fun ackChannel(channelId: String, messageId: String) {
+        runCatching {
+            post(
+                "/channels/$channelId/messages/$messageId/ack",
+                JSONObject().put("token", null as String?)
+            )
+        }
     }
 
     suspend fun logout(): Result<Unit> = runCatching {
