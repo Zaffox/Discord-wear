@@ -119,63 +119,51 @@ fun ServerChannels(
 
                         items(group.channels.size) { idx ->
                             val ch = group.channels[idx]
+                            // Always skip channels with no access — never display them
+                            if (!ch.hasAccess) return@items
                             val icon = channelIcon(ch, allChannels)
-                            if (ch.hasAccess) {
-                                val rs = if (showMentionBadges) readState[ch.id] else null
-                                val mentionCount = rs?.mentionCount ?: 0
-                                // Unread only when the channel has a newer message than what was last read
-                                val hasUnread = rs != null && ch.lastMessageId != null &&
-                                    ch.lastMessageId > rs.lastMessageId
-                                Button(
-                                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                                    colors   = ButtonDefaults.filledTonalButtonColors(),
-                                    onClick  = { onNavigateToChatScreen(ch.id, ch.name) }
+                            val rs = if (showMentionBadges) readState[ch.id] else null
+                            val mentionCount = rs?.mentionCount ?: 0
+                            val hasUnread = rs != null && ch.lastMessageId != null &&
+                                ch.lastMessageId > rs.lastMessageId
+                            Button(
+                                modifier = Modifier.fillMaxWidth().height(36.dp),
+                                colors   = ButtonDefaults.filledTonalButtonColors(),
+                                onClick  = { onNavigateToChatScreen(ch.id, ch.name) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            text = "$icon ${ch.name}",
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (mentionCount > 0) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
-                                                    .background(Color(0xFFF23F43), CircleShape)
-                                                    .padding(horizontal = 4.dp),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    text = if (mentionCount > 99) "99+" else mentionCount.toString(),
-                                                    color = Color.White,
-                                                    fontSize = 8.sp,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                                )
-                                            }
-                                        } else if (hasUnread) {
-                                            // Unread dot (no ping)
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(7.dp)
-                                                    .background(Color.White.copy(alpha = 0.8f), CircleShape)
+                                    Text(
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        text = "$icon ${ch.name}",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (mentionCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                                                .background(Color(0xFFF23F43), CircleShape)
+                                                .padding(horizontal = 4.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = if (mentionCount > 99) "99+" else mentionCount.toString(),
+                                                color = Color.White,
+                                                fontSize = 8.sp,
+                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                                             )
                                         }
+                                    } else if (hasUnread) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(7.dp)
+                                                .background(Color.White.copy(alpha = 0.8f), CircleShape)
+                                        )
                                     }
-                                }
-                            } else {
-                                // Inaccessible channel — shown greyed out, not tappable
-                                Button(
-                                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                                    enabled  = false,
-                                    colors   = ButtonDefaults.filledTonalButtonColors(),
-                                    onClick  = {}
-                                ) {
-                                    Text("🔒 ${ch.name}")
                                 }
                             }
                         }

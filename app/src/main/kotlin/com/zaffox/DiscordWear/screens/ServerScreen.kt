@@ -1,7 +1,8 @@
 package com.zaffox.discordwear.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +23,7 @@ import androidx.wear.compose.material3.*
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.zaffox.discordwear.SetupPreferences
 import com.zaffox.discordwear.api.Guild
 import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
@@ -38,6 +40,11 @@ fun ServerScreen(onNavigateToChannels: (guildId: String, guildName: String) -> U
     val guilds  by (repo?.guilds ?: return).collectAsState()
     var loading by remember { mutableStateOf(guilds.isEmpty()) }
 
+    // Mutable sets that trigger recomposition
+    var pinnedIds by remember { mutableStateOf(SetupPreferences.getPinnedServers(context)) }
+    var hiddenIds by remember { mutableStateOf(SetupPreferences.getHiddenServers(context)) }
+    var showHidden by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         scope.launch {
             if (guilds.isEmpty()) {
@@ -49,80 +56,154 @@ fun ServerScreen(onNavigateToChannels: (guildId: String, guildName: String) -> U
         }
     }
 
+    // Sort: pinned first (in original order), then rest (hidden excluded unless showHidden)
+    val sortedGuilds = remember(guilds, pinnedIds, hiddenIds, showHidden) {
+        val visible = guilds.filter { showHidden || !hiddenIds.contains(it.id) }
+        val pinned  = visible.filter { pinnedIds.contains(it.id) }
+        val rest    = visible.filter { !pinnedIds.contains(it.id) }
+        pinned + rest
+    }
+
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(state = listState) {
             item { Text("Servers", style = MaterialTheme.typography.titleMedium) }
 
             if (loading) {
                 item { CircularProgressIndicator() }
-            } else if (guilds.isEmpty()) {
+            } else if (sortedGuilds.isEmpty() && !showHidden) {
                 item { Text("No servers found.", style = MaterialTheme.typography.bodySmall) }
             } else {
-                items(guilds.size) { index ->
-                    val guild = guilds[index]
+                items(sortedGuilds.size) { index ->
+                    val guild  = sortedGuilds[index]
+                    val isPinned = pinnedIds.contains(guild.id)
+                    val isHidden = hiddenIds.contains(guild.id)
                     ServerButton(
                         guild       = guild,
                         imageLoader = imageLoader,
-                        onClick     = { onNavigateToChannels(guild.id, guild.name) }
+                        isPinned    = isPinned,
+                        isHidden    = isHidden,
+                        onClick     = { if (!isHidden) onNavigateToChannels(guild.id, guild.name) },
+                        onPin       = {
+                            SetupPreferences.togglePinnedServer(context, guild.id)
+                            pinnedIds = SetupPreferences.getPinnedServers(context)
+                        },
+                        onHide      = {
+                            SetupPreferences.toggleHiddenServer(context, guild.id)
+                            hiddenIds = SetupPreferences.getHiddenServers(context)
+                        }
                     )
+                }
+
+                // Show/hide hidden servers toggle at the bottom
+                if (hiddenIds.isNotEmpty()) {
+                    item {
+                        Button(
+                            onClick  = { showHidden = !showHidden },
+                            modifier = Modifier.fillMaxWidth().height(32.dp),
+                            colors   = ButtonDefaults.filledTonalButtonColors()
+                        ) {
+                            Text(
+                                if (showHidden) "Hide hidden servers" else "Show hidden (${hiddenIds.size})",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ServerButton(
     guild: Guild,
     imageLoader: ImageLoader,
-    onClick: () -> Unit
+    isPinned: Boolean,
+    isHidden: Boolean,
+    onClick: () -> Unit,
+    onPin: () -> Unit,
+    onHide: () -> Unit
 ) {
     val context   = LocalContext.current
     val bannerUrl = guild.bannerUrl()
     val iconUrl   = guild.iconUrl()
+
+    var showMenu by remember { mutableStateOf(false) }
+
+    if (showMenu) {
+        // Context menu overlay
+        ScreenScaffold(scrollState = rememberScalingLazyListState()) {
+            ScalingLazyColumn(modifier = Modifier.fillMaxSize()) {
+                item {
+                    Text(
+                        guild.name,
+                        style    = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    Button(
+                        onClick  = { onPin(); showMenu = false },
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        colors   = ButtonDefaults.filledTonalButtonColors()
+                    ) { Text(if (isPinned) "📌 Unpin" else "📌 Pin to top") }
+                }
+                item {
+                    Button(
+                        onClick  = { onHide(); showMenu = false },
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        colors   = ButtonDefaults.filledTonalButtonColors()
+                    ) { Text(if (isHidden) "👁 Unhide" else "🙈 Hide") }
+                }
+                item {
+                    Button(
+                        onClick  = { showMenu = false },
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        colors   = ButtonDefaults.filledTonalButtonColors()
+                    ) { Text("Cancel") }
+                }
+            }
+        }
+        return
+    }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
             .clip(RoundedCornerShape(26.dp))
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick      = onClick,
+                onLongClick  = { showMenu = true }
+            )
+            .then(if (isHidden) Modifier.background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.4f)) else Modifier)
     ) {
-        // ── Background: banner image or solid surface colour ──────────────────
-        if (bannerUrl != null) {
+        // ── Background ────────────────────────────────────────────────────────
+        if (bannerUrl != null && !isHidden) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(bannerUrl)
-                    .crossfade(true)
-                    .build(),
+                model = ImageRequest.Builder(context).data(bannerUrl).crossfade(true).build(),
                 imageLoader        = imageLoader,
                 contentDescription = null,
                 contentScale       = ContentScale.Crop,
                 modifier           = Modifier.matchParentSize()
             )
-            // Dark gradient scrim so the name stays readable over any banner
             Box(
                 modifier = Modifier
                     .matchParentSize()
                     .background(
                         Brush.horizontalGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.55f),
-                                Color.Black.copy(alpha = 0.30f)
-                            )
+                            colors = listOf(Color.Black.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.30f))
                         )
                     )
             )
         } else {
-            // No banner — plain surface tonal fill matching the rest of the UI
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-            )
+            Box(modifier = Modifier.matchParentSize().background(MaterialTheme.colorScheme.surfaceContainer))
         }
 
-        // ── Content row: icon + name ──────────────────────────────────────────
+        // ── Content row ───────────────────────────────────────────────────────
         Row(
             modifier = Modifier
                 .matchParentSize()
@@ -130,47 +211,44 @@ private fun ServerButton(
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Server icon — pure-Compose blurple circle with initial when no icon URL
-            if (iconUrl != null) {
+            // Pin indicator
+            if (isPinned) {
+                Text("📌", fontSize = 10.sp)
+            }
+
+            // Server icon
+            if (iconUrl != null && !isHidden) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(iconUrl)
-                        .crossfade(true)
-                        .build(),
+                    model = ImageRequest.Builder(context).data(iconUrl).crossfade(true).build(),
                     imageLoader        = imageLoader,
                     contentDescription = null,
                     contentScale       = ContentScale.Crop,
-                    modifier           = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
+                    modifier           = Modifier.size(32.dp).clip(CircleShape)
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .size(32.dp)
-                        .background(Color(0xFF5865F2), CircleShape),
+                        .background(
+                            if (isHidden) Color(0xFF5865F2).copy(alpha = 0.4f) else Color(0xFF5865F2),
+                            CircleShape
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text     = guild.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
-                        color    = Color.White,
+                        color    = Color.White.copy(alpha = if (isHidden) 0.4f else 1f),
                         fontSize = 14.sp,
                         style    = MaterialTheme.typography.labelSmall
                     )
                 }
             }
 
-            // Name — white + dark pill backing when over a banner, normal colour otherwise
-            val nameColor = if (bannerUrl != null) Color.White
-                            else MaterialTheme.colorScheme.onSurface
-
-            val nameMod = if (bannerUrl != null)
-                Modifier
-                    .weight(1f)
-                    .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-            else
-                Modifier.weight(1f)
+            val nameColor = when {
+                isHidden  -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                bannerUrl != null -> Color.White
+                else      -> MaterialTheme.colorScheme.onSurface
+            }
 
             Text(
                 text     = guild.name,
@@ -178,7 +256,7 @@ private fun ServerButton(
                 color    = nameColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = nameMod
+                modifier = Modifier.weight(1f)
             )
         }
     }

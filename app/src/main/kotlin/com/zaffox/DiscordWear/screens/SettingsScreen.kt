@@ -66,7 +66,7 @@ fun SettingsScreen(
                             scope.launch {
                                 runCatching { repo?.rest?.logout() }
                                 repo?.disconnect()
-                                SetupPreferences.clearToken(context)
+                                SetupPreferences.clearAll(context)
                                 context.discordApp.clearRepository()
                                 onLogOut()
                             }

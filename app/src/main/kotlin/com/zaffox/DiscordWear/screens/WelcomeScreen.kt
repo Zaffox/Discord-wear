@@ -1,6 +1,12 @@
 package com.zaffox.discordwear.screens
 
 import android.app.RemoteInput
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,9 +43,50 @@ fun WelcomeScreen(onSetupComplete: () -> Unit) {
     var webServer    by remember { mutableStateOf<TokenWebServer?>(null) }
     var showQr       by remember { mutableStateOf(false) }
 
+    // WiFi lock — held while the web server is running so the watch doesn't drop WiFi
+    val wifiManager  = remember {
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    }
+    val wifiLock = remember {
+        wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DiscordWear:TokenServer")
+    }
+    // ConnectivityManager callback — binds the process to WiFi so all traffic uses it
+    val connectivityManager = remember {
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    var wifiNetworkCallback by remember { mutableStateOf<ConnectivityManager.NetworkCallback?>(null) }
+
+    fun acquireWifiLock() {
+        if (!wifiLock.isHeld) wifiLock.acquire()
+        // Request a WiFi network and bind the process to it so HTTP traffic goes over WiFi
+        val req = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                connectivityManager.bindProcessToNetwork(network)
+            }
+            override fun onLost(network: Network) {
+                connectivityManager.bindProcessToNetwork(null)
+            }
+        }
+        connectivityManager.requestNetwork(req, cb)
+        wifiNetworkCallback = cb
+    }
+
+    fun releaseWifiLock() {
+        if (wifiLock.isHeld) wifiLock.release()
+        wifiNetworkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        wifiNetworkCallback = null
+        connectivityManager.bindProcessToNetwork(null)
+    }
+
     // Cleanup server on dispose
     DisposableEffect(Unit) {
-        onDispose { webServer?.stop() }
+        onDispose {
+            webServer?.stop()
+            releaseWifiLock()
+        }
     }
 
     val inputLauncher = rememberLauncherForActivityResult(
@@ -71,6 +118,7 @@ fun WelcomeScreen(onSetupComplete: () -> Unit) {
     }
 
     fun startWebServer() {
+        acquireWifiLock()
         val srv = TokenWebServer(port = 8080) { token ->
             SetupPreferences.saveToken(context, token)
             context.discordApp.initRepository(token)
@@ -79,6 +127,7 @@ fun WelcomeScreen(onSetupComplete: () -> Unit) {
                 delay(500)
                 webServer?.stop()
                 webServer = null
+                releaseWifiLock()
                 onSetupComplete()
             }
         }
@@ -156,7 +205,7 @@ fun WelcomeScreen(onSetupComplete: () -> Unit) {
                 }
                 item {
                     Button(
-                        onClick  = { webServer?.stop(); webServer = null; serverStatus = "" },
+                        onClick  = { webServer?.stop(); webServer = null; serverStatus = ""; releaseWifiLock() },
                         modifier = Modifier.fillMaxWidth().height(36.dp),
                         colors   = ButtonDefaults.filledTonalButtonColors()
                     ) { Text("Stop Server") }
