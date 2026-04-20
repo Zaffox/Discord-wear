@@ -139,7 +139,7 @@ fun ChatScreen(
     LaunchedEffect(messages.size, loading) {
         if (!loading && !scrolledToUnread.value && messages.isNotEmpty()) {
             scrolledToUnread.value = true
-            val lastRead = readState[channelId]
+            val lastRead = readState[channelId]?.lastMessageId
             if (lastRead != null) {
                 // Find the first message after the last-read message ID
                 // Messages are oldest-first; IDs are snowflakes (numerically ordered)
