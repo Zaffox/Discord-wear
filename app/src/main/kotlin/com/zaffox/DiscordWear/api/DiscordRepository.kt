@@ -298,17 +298,13 @@ class DiscordRepository(token: String, private val context: Context? = null) {
      * The read pointer is only advanced — it never goes backwards.
      */
     fun markChannelRead(channelId: String, messageId: String) {
-        val advanced = _readState.updateAndGet { current ->
-            val existing = current[channelId]
-            if (existing == null || messageId > existing.lastMessageId) {
-                current + (channelId to ChannelUnreadState(lastMessageId = messageId, mentionCount = 0))
-            } else current
+        val existing = _readState.value[channelId]
+        // Only advance — never go backwards
+        if (existing != null && messageId <= existing.lastMessageId) return
+        _readState.update { current ->
+            current + (channelId to ChannelUnreadState(lastMessageId = messageId, mentionCount = 0))
         }
-        // Only send the REST ack if we actually advanced the pointer
-        val updated = advanced[channelId]
-        if (updated?.lastMessageId == messageId) {
-            scope.launch { rest.ackChannel(channelId, messageId) }
-        }
+        scope.launch { rest.ackChannel(channelId, messageId) }
     }
 
     suspend fun loadMessages(channelId: String) {
