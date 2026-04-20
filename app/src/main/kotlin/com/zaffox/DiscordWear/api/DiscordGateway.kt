@@ -298,8 +298,8 @@ class DiscordGateway(private val token: String) {
 // ── Event sealed class ────────────────────────────────────────────────────────
 
 sealed class GatewayEvent {
-    /** [readState] maps channelId -> last-read messageId from the READY payload. */
-    data class Ready(val user: DiscordUser, val readState: Map<String, String> = emptyMap(), val presences: List<UserPresence> = emptyList()) : GatewayEvent()
+    /** [readState] maps channelId -> ChannelUnreadState from the READY payload. */
+    data class Ready(val user: DiscordUser, val readState: Map<String, ChannelUnreadState> = emptyMap(), val presences: List<UserPresence> = emptyList()) : GatewayEvent()
     data class MessageCreate(val message: DiscordMessage, val memberRoleIds: List<String> = emptyList(), val guildId: String? = null) : GatewayEvent()
     data class MessageUpdate(val message: DiscordMessage) : GatewayEvent()
     data class MessageDelete(val id: String, val channelId: String) : GatewayEvent()

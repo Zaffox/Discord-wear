@@ -12,7 +12,8 @@ data class DiscordUser(
     val globalName: String?,
     val avatarHash: String?,
     val premiumType: Int = 0,
-    val nameplateAsset: String? = null   // e.g. "nameplates/nameplates/twilight/"
+    val nameplateAsset: String? = null,   // e.g. "nameplates/nameplates/twilight/"
+    val avatarDecorationSkuId: String? = null  // profile picture decoration SKU
 ) {
     val hasNitro: Boolean get() = premiumType > 0
     val displayName: String get() = globalName ?: username
@@ -28,6 +29,15 @@ data class DiscordUser(
             "https://cdn.discordapp.com/media/v1/collectibles-shop/${nameplateAsset}/static"
         else null
 
+    /**
+     * Full CDN URL for the avatar decoration overlay image (static PNG), or null if none.
+     * Uses the same collectibles-shop CDN pattern as nameplates.
+     */
+    fun avatarDecorationUrl(): String? =
+        if (avatarDecorationSkuId != null)
+            "https://cdn.discordapp.com/media/v1/collectibles-shop/${avatarDecorationSkuId}/static"
+        else null
+
     companion object {
         fun fromJson(o: JSONObject) = DiscordUser(
             id             = o.getString("id"),
@@ -38,9 +48,15 @@ data class DiscordUser(
             premiumType    = o.optInt("premium_type", 0),
             nameplateAsset = o.optJSONObject("collectibles")
                               ?.optJSONObject("nameplate")
-                              ?.optString("sku_id") //discords API is hard for user accounts, not the same api as bots AFAIK for this
+                              ?.optString("sku_id")
                               ?.takeIf { it.isNotEmpty() && it != "null" }
-                              ?: o.optString("nameplate_asset").takeIf { it.isNotEmpty() && it != "null" }
+                              ?: o.optString("nameplate_asset").takeIf { it.isNotEmpty() && it != "null" },
+            avatarDecorationSkuId =
+                o.optJSONObject("collectibles")
+                  ?.optJSONObject("avatar_decoration")
+                  ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" }
+                ?: o.optJSONObject("avatar_decoration_data")
+                    ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" }
         )
     }
 }
@@ -258,7 +274,8 @@ data class Channel(
     val permissionOverwrites: List<PermissionOverwrite> = emptyList(),
     val recipients: List<DiscordUser> = emptyList(),
     /** Whether the current user has VIEW_CHANNEL permission. Default true (unknown). */
-    val hasAccess: Boolean = true
+    val hasAccess: Boolean = true,
+    val slowModeSeconds: Int = 0  // 0 = no slow mode
 ) {
     val isDm: Boolean       get() = type == ChannelType.DM || type == ChannelType.GROUP_DM
     val isText: Boolean     get() = type == ChannelType.GUILD_TEXT || type == ChannelType.GUILD_NEWS
@@ -306,7 +323,8 @@ data class Channel(
                 parentId             = o.optString("parent_id").takeIf { it.isNotEmpty() },
                 position             = o.optInt("position", 0),
                 permissionOverwrites = overwrites,
-                recipients           = recipients
+                recipients           = recipients,
+                slowModeSeconds      = o.optInt("rate_limit_per_user", 0)
             )
         }
         fun listFromJson(arr: JSONArray): List<Channel> =
@@ -418,6 +436,14 @@ data class StickerItem(
     }
 }
 
+// ── Unread / mention state ──────────────────────────────────────────────────
+
+/** Unread state for one channel: last read message ID + unread mention count. */
+data class ChannelUnreadState(
+    val lastMessageId: String,
+    val mentionCount: Int = 0
+)
+
 // ── Content parser ────────────────────────────────────────────────────────────
 
 object ContentParser {
@@ -429,6 +455,54 @@ object ContentParser {
         data class RoleMention(val roleId: String, val roleName: String) : Part()
         data class ChannelMention(val channelId: String, val channelName: String) : Part()
         data class Link(val url: String) : Part()
+    }
+
+    /** Markdown span tokens: bold, italic, strikethrough, inline code, spoiler */
+    data class MarkdownSpan(
+        val text: String,
+        val bold: Boolean = false,
+        val italic: Boolean = false,
+        val strikethrough: Boolean = false,
+        val code: Boolean = false,
+        val spoiler: Boolean = false
+    )
+
+    /**
+     * Parse a plain-text string into markdown spans.
+     * Handles: **bold**, *italic*, __underline__, ~~strike~~, `code`, ||spoiler||
+     */
+    fun parseMarkdown(text: String): List<MarkdownSpan> {
+        if (text.isBlank()) return listOf(MarkdownSpan(text))
+        val spans = mutableListOf<MarkdownSpan>()
+        val regex = Regex(
+            """(\*\*(.+?)\*\*)""" +          // **bold**
+            """|(\*(.+?)\*)""" +              // *italic*
+            """|(~~(.+?)~~)""" +               // ~~strike~~
+            """|(```.+?```)|(`(.+?)`)""" +     // ```block``` or `code`
+            """|(\|\|(.+?)\|\|)""" +          // ||spoiler||
+            """|(_{2}(.+?)_{2})""",            // __underline__ (bold)
+            setOf(RegexOption.DOT_MATCHES_ALL)
+        )
+        var cursor = 0
+        for (match in regex.findAll(text)) {
+            if (match.range.first > cursor) {
+                spans += MarkdownSpan(text.substring(cursor, match.range.first))
+            }
+            val raw = match.value
+            when {
+                raw.startsWith("**") -> spans += MarkdownSpan(match.groupValues[2], bold = true)
+                raw.startsWith("*")  -> spans += MarkdownSpan(match.groupValues[4], italic = true)
+                raw.startsWith("~~") -> spans += MarkdownSpan(match.groupValues[6], strikethrough = true)
+                raw.startsWith("```") -> spans += MarkdownSpan(raw.removeSurrounding("```"), code = true)
+                raw.startsWith("`")   -> spans += MarkdownSpan(match.groupValues[9], code = true)
+                raw.startsWith("||") -> spans += MarkdownSpan(match.groupValues[11], spoiler = true)
+                raw.startsWith("__") -> spans += MarkdownSpan(match.groupValues[13], bold = true)
+                else -> spans += MarkdownSpan(raw)
+            }
+            cursor = match.range.last + 1
+        }
+        if (cursor < text.length) spans += MarkdownSpan(text.substring(cursor))
+        return spans.filter { it.text.isNotEmpty() }
     }
 
     private val TOKEN_RE = Regex(

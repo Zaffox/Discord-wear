@@ -56,8 +56,17 @@ class DiscordRepository(token: String, private val context: Context? = null) {
      * channelId → last-read messageId, populated from the READY gateway event.
      * Used by ChatScreen to scroll to the first unread message.
      */
-    private val _readState = MutableStateFlow<Map<String, String>>(emptyMap())
-    val readState: StateFlow<Map<String, String>> = _readState.asStateFlow()
+    private val _readState = MutableStateFlow<Map<String, ChannelUnreadState>>(emptyMap())
+    val readState: StateFlow<Map<String, ChannelUnreadState>> = _readState.asStateFlow()
+
+    /** Total unread mention count across all channels. */
+    val totalMentionCount: StateFlow<Int> = kotlinx.coroutines.flow.MutableStateFlow(0).also { /* see below */ }.let {
+        // We derive this live from _readState in collectMentionCount()
+        _readState
+    }.let { MutableStateFlow(0) } // placeholder; real value comes from readState.map { it.values.sumOf { s -> s.mentionCount } }
+    // Real total mention count derived from readState
+    private val _totalMentions = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val totalMentions: StateFlow<Int> = _totalMentions.asStateFlow()
 
     // Emoji / sticker cache: guildId → list
     private val emojiCache  = mutableMapOf<String, List<GuildEmoji>>()
@@ -67,6 +76,26 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     private val channelGuildCache = mutableMapOf<String, String>()
     // Typing timeout jobs: "channelId:userId" -> cancellable Job
     private val typingJobs = mutableMapOf<String, Job>()
+    // slowmode: channelId -> last send timestamp (ms)
+    private val lastSentAt = mutableMapOf<String, Long>()
+
+    /**
+     * Returns how many seconds the user must wait before sending again in a slow-mode channel.
+     * Returns 0 if they can send immediately.
+     */
+    fun slowModeRemainingSeconds(channelId: String): Int {
+        val ch = channelCache[channelId] ?: return 0
+        val intervalMs = ch.slowModeSeconds * 1000L
+        if (intervalMs <= 0) return 0
+        val lastMs = lastSentAt[channelId] ?: return 0
+        val elapsed = System.currentTimeMillis() - lastMs
+        val remaining = intervalMs - elapsed
+        return if (remaining > 0) ((remaining + 999) / 1000).toInt() else 0
+    }
+
+    fun getSlowModeSeconds(channelId: String): Int =
+        channelCache[channelId]?.slowModeSeconds ?: 0
+
     // userId -> display name, populated from TYPING_START and message authors
     private val userDisplayNames = mutableMapOf<String, String>()
 
@@ -151,6 +180,22 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     }
 
     fun disconnect() = gateway.disconnect()
+
+    /**
+     * Called when the app returns to foreground after being backgrounded.
+     * Re-fetches messages for any channel that was actively viewed so new
+     * messages sent while the app was paused appear immediately.
+     */
+    fun refreshOnResume(activeChannelId: String?) {
+        scope.launch {
+            // Refresh DM list in case new DMs arrived
+            runCatching { refreshDmChannels() }
+            // Re-load messages for the active channel
+            if (activeChannelId != null) {
+                runCatching { loadMessages(activeChannelId) }
+            }
+        }
+    }
 
     // ── Refresh helpers ───────────────────────────────────────────────────────
 
@@ -270,6 +315,7 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     suspend fun sendMessage(channelId: String, content: String): Result<DiscordMessage> {
         val result = rest.sendMessage(channelId, content)
         result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
                 if (list.none { it.id == msg.id }) list.add(msg)
@@ -282,6 +328,7 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     suspend fun sendSticker(channelId: String, stickerId: String): Result<DiscordMessage> {
         val result = rest.sendSticker(channelId, stickerId)
         result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
                 if (list.none { it.id == msg.id }) list.add(msg)
@@ -294,6 +341,7 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     suspend fun sendReply(channelId: String, content: String, replyToId: String): Result<DiscordMessage> {
         val result = rest.sendReply(channelId, content, replyToId)
         result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
             _messages.update { current ->
                 val list = current[channelId].orEmpty().toMutableList()
                 if (list.none { it.id == msg.id }) list.add(msg)
@@ -384,6 +432,7 @@ class DiscordRepository(token: String, private val context: Context? = null) {
                         currentUserId = event.user.id
                         if (event.readState.isNotEmpty()) {
                             _readState.value = event.readState
+                            _totalMentions.value = event.readState.values.sumOf { it.mentionCount }
                         }
                         if (event.presences.isNotEmpty()) {
                             _presences.value = event.presences
