@@ -1,8 +1,12 @@
 package com.zaffox.discordwear.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -12,6 +16,7 @@ import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
 import com.zaffox.discordwear.SetupPreferences
+import com.zaffox.discordwear.api.ChannelUnreadState
 import com.zaffox.discordwear.api.CategoryGroup
 import com.zaffox.discordwear.api.Channel
 import com.zaffox.discordwear.api.ChannelType
@@ -44,7 +49,9 @@ fun ServerChannels(
     val scope     = rememberCoroutineScope()
 
     // Read setting: hide channels user has no access to
-    val hideInaccessible = remember { SetupPreferences.getHideInaccessibleChannels(context) }
+    val hideInaccessible  = remember { SetupPreferences.getHideInaccessibleChannels(context) }
+    val showMentionBadges = remember { SetupPreferences.getShowMentionBadges(context) }
+    val readState by (repo?.readState ?: return).collectAsState()
 
     var groups  by remember { mutableStateOf<List<CategoryGroup>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -115,16 +122,48 @@ fun ServerChannels(
                             val ch = group.channels[idx]
                             val icon = channelIcon(ch, allChannels)
                             if (ch.hasAccess) {
+                                val unread = if (showMentionBadges) readState[ch.id] else null
+                                val mentionCount = unread?.mentionCount ?: 0
                                 Button(
                                     modifier = Modifier.fillMaxWidth().height(36.dp),
                                     colors   = ButtonDefaults.filledTonalButtonColors(),
                                     onClick  = { onNavigateToChatScreen(ch.id, ch.name) }
                                 ) {
-                                    Text(
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        text = "$icon ${ch.name}"
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            text = "$icon ${ch.name}",
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (mentionCount > 0) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                                                    .background(Color(0xFFF23F43), CircleShape)
+                                                    .padding(horizontal = 4.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = if (mentionCount > 99) "99+" else mentionCount.toString(),
+                                                    color = Color.White,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                                )
+                                            }
+                                        } else if (unread != null) {
+                                            // Unread dot (no ping)
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .background(Color.White.copy(alpha = 0.8f), CircleShape)
+                                            )
+                                        }
+                                    }
                                 }
                             } else {
                                 // Inaccessible channel — shown greyed out, not tappable

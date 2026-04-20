@@ -3,6 +3,7 @@ package com.zaffox.discordwear.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
@@ -25,6 +26,7 @@ import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.zaffox.discordwear.api.*
 import com.zaffox.discordwear.discordApp
+import com.zaffox.discordwear.SetupPreferences
 import kotlinx.coroutines.launch
 
 @Composable
@@ -39,9 +41,11 @@ fun DmsScreen(
     val imageLoader = remember { ImageLoader.Builder(context).build() }
 
     if (repo == null) return
-    val dmChannels by repo.dmChannels.collectAsState()
-    val presences  by repo.presences.collectAsState()
-    var loading    by remember { mutableStateOf(dmChannels.isEmpty()) }
+    val dmChannels   by repo.dmChannels.collectAsState()
+    val presences    by repo.presences.collectAsState()
+    val readState    by repo.readState.collectAsState()
+    val showBadges   = remember { SetupPreferences.getShowMentionBadges(context) }
+    var loading      by remember { mutableStateOf(dmChannels.isEmpty()) }
 
     LaunchedEffect(Unit) {
         if (dmChannels.isEmpty()) {
@@ -65,11 +69,15 @@ fun DmsScreen(
                     val recipient = dm.recipients.firstOrNull()
                     val presence  = recipient?.let { presences[it.id] }
                     DmButton(
-                        dm          = dm,
-                        recipient   = recipient,
-                        presence    = presence,
-                        imageLoader = imageLoader,
-                        onClick     = { onNavigateToChatScreen(dm.id, dm.displayName) }
+                        dm           = dm,
+                        recipient    = recipient,
+                        presence     = presence,
+                        imageLoader  = imageLoader,
+                        mentionCount = if (showBadges) readState[dm.id]?.mentionCount ?: 0 else 0,
+                        hasUnread    = showBadges && readState.containsKey(dm.id)
+                            && (dm.lastMessageId != null)
+                            && (readState[dm.id]?.lastMessageId != dm.lastMessageId),
+                        onClick      = { onNavigateToChatScreen(dm.id, dm.displayName) }
                     )
                 }
             }
@@ -95,6 +103,12 @@ private fun OnlineStatus.label(): String = when (this) {
     OnlineStatus.OFFLINE -> "Offline"
 }
 
+/** Returns the active platform icon string based on client_status, preferring mobile. */
+private fun ClientStatus.platformIcon(): String? = when {
+    mobile  != null && mobile  != OnlineStatus.OFFLINE -> "📱"// res/drawable/mobile
+    desktop != null && desktop != OnlineStatus.OFFLINE -> "🖥️"// res/drawable/desktop
+    else -> null
+}
 
 // ── DM Button ────────────────────────────────────────────────────────────────
 
@@ -104,6 +118,8 @@ private fun DmButton(
     recipient: DiscordUser?,
     presence: UserPresence?,
     imageLoader: ImageLoader,
+    mentionCount: Int = 0,
+    hasUnread: Boolean = false,
     onClick: () -> Unit
 ) {
     val context       = LocalContext.current
@@ -157,28 +173,68 @@ private fun DmButton(
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Avatar with status dot
+            // Avatar with status dot and optional decoration / mention badge
             Box(contentAlignment = Alignment.BottomEnd) {
-                if (avatarUrl != null) {
-                    SubcomposeAsyncImage(
-                        model = ImageRequest.Builder(context).data(avatarUrl).crossfade(true).build(),
-                        imageLoader        = imageLoader,
-                        contentDescription = null,
-                        alignment = Alignment.CenterEnd,
-                        contentScale       = ContentScale.Crop,
-                        modifier           = Modifier.size(38.dp).clip(CircleShape),
-                        error = {
-                            Box(
-                                modifier = Modifier.size(38.dp).background(Color(0xFF1E1F22), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) { Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                // Avatar circle
+                Box(contentAlignment = Alignment.TopEnd) {
+                    if (avatarUrl != null) {
+                        SubcomposeAsyncImage(
+                            model = ImageRequest.Builder(context).data(avatarUrl).crossfade(true).build(),
+                            imageLoader        = imageLoader,
+                            contentDescription = null,
+                            alignment = Alignment.CenterEnd,
+                            contentScale       = ContentScale.Crop,
+                            modifier           = Modifier.size(38.dp).clip(CircleShape),
+                            error = {
+                                Box(
+                                    modifier = Modifier.size(38.dp).background(Color(0xFF1E1F22), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) { Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                            }
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier.size(38.dp).background(Color(0xFF1E1F22), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) { Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                    }
+                    // Avatar decoration overlay
+                    val decorUrl = recipient?.avatarDecorationUrl()
+                    if (decorUrl != null) {
+                        SubcomposeAsyncImage(
+                            model = ImageRequest.Builder(context).data(decorUrl).crossfade(false).build(),
+                            imageLoader        = imageLoader,
+                            contentDescription = null,
+                            contentScale       = ContentScale.Fit,
+                            modifier           = Modifier.size(52.dp)  // slightly larger to frame the avatar
+                        )
+                    }
+                    // Mention badge (top-right corner)
+                    if (mentionCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .offset(x = 2.dp, y = (-2).dp)
+                                .defaultMinSize(minWidth = 15.dp, minHeight = 15.dp)
+                                .background(Color(0xFFF23F43), CircleShape)
+                                .padding(horizontal = 3.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text     = if (mentionCount > 99) "99+" else mentionCount.toString(),
+                                color    = Color.White,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.size(38.dp).background(Color(0xFF1E1F22), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) { Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                    } else if (hasUnread) {
+                        // Small unread dot (no ping)
+                        Box(
+                            modifier = Modifier
+                                .offset(x = 2.dp, y = (-2).dp)
+                                .size(9.dp)
+                                .background(Color.White, CircleShape)
+                        )
+                    }
                 }
                 // Status dot with dark border ring
                 Box(
@@ -197,6 +253,7 @@ private fun DmButton(
 
             // Text column
             Column(modifier = Modifier.weight(1f)) {
+                // Name + platform icon
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -210,6 +267,9 @@ private fun DmButton(
                         overflow   = TextOverflow.Ellipsis,
                         modifier   = Modifier.weight(1f, fill = false)
                     )
+                    presence?.clientStatus?.platformIcon()?.let { icon ->
+                        Text(icon, fontSize = 10.sp)
+                    }
                 }
 
                 // Status line: custom status text/emoji OR generic status label

@@ -42,6 +42,7 @@ import android.content.Context
 import android.media.MediaPlayer
 import com.zaffox.discordwear.api.*
 import com.zaffox.discordwear.discordApp
+import com.zaffox.discordwear.SetupPreferences
 import com.zaffox.discordwear.R
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -100,6 +101,25 @@ fun ChatScreen(
     val myId = currentUser?.id ?: currentUserId
     val hasNitro = currentUser?.hasNitro ?: false
     val typingUsers = typingSet.filter { it != myId }
+
+    // Vencord / custom settings
+    val sendAnimatedAsGif  = remember { SetupPreferences.getSendAnimatedAsGif(context) }
+    val spoilerRevealOnTap = remember { SetupPreferences.getSpoilerRevealOnTap(context) }
+    val compactMode        = remember { SetupPreferences.getCompactMode(context) }
+
+    // Slowmode — how many seconds must elapse between sends
+    val slowModeSecs  = remember(channelId) { repo.getSlowModeSeconds(channelId) }
+    var slowRemaining by remember { mutableStateOf(0) }
+    // Tick the slowmode countdown every second while active
+    LaunchedEffect(slowModeSecs) {
+        if (slowModeSecs > 0) {
+            while (true) {
+                slowRemaining = repo.slowModeRemainingSeconds(channelId)
+                if (slowRemaining <= 0) break
+                delay(1_000)
+            }
+        }
+    }
 
     // Check if the user can send messages in this channel
     val canSend = remember(channelId) { repo.canSendMessage(channelId) }
@@ -246,8 +266,11 @@ fun ChatScreen(
                     }
                     reactingToMsg = null
                 } else {
-                    // Normal mode: append emoji to pending text and input field
-                    val newText = if (inputText.isBlank()) insertText else "$inputText$insertText"
+                    // Normal mode: optionally rewrite animated emoji as raw GIF link
+                    val finalText = if (sendAnimatedAsGif) {
+                        rewriteAnimatedEmojiAsGif(insertText)
+                    } else insertText
+                    val newText = if (inputText.isBlank()) finalText else "$inputText$finalText"
                     inputText   = newText
                     pendingText = newText
                 }
@@ -385,13 +408,17 @@ fun ChatScreen(
                             Text(
                                 "▶",
                                 style    = MaterialTheme.typography.labelSmall,
-                                color    = MaterialTheme.colorScheme.primary,
+                                color    = if (slowRemaining > 0)
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .clickable {
+                                        if (slowRemaining > 0) return@clickable
                                         val text = pendingText
                                         pendingText = ""
                                         inputText   = ""
                                         scope.launch {
+                                            slowRemaining = slowModeSecs
                                             val replyTarget = replyingTo
                                             if (replyTarget != null) {
                                                 repo.sendReply(channelId, text, replyTarget.id)
@@ -400,6 +427,11 @@ fun ChatScreen(
                                             } else {
                                                 repo.sendMessage(channelId, text)
                                                     .onFailure { sendError = "Failed: ${it.message}" }
+                                            }
+                                            while (true) {
+                                                delay(1_000)
+                                                slowRemaining = repo.slowModeRemainingSeconds(channelId)
+                                                if (slowRemaining <= 0) break
                                             }
                                         }
                                     }
@@ -452,6 +484,8 @@ fun ChatScreen(
                         isContinuation = isContinuation,
                         imageLoader    = imageLoader,
                         channelNames   = repo.getChannelNames(),
+                        compactMode    = compactMode,
+                        spoilerRevealOnTap = spoilerRevealOnTap,
                         onReact        = { emoji ->
                             scope.launch { repo.toggleReaction(channelId, msg.id, emoji) }
                         },
@@ -558,9 +592,11 @@ fun ChatScreen(
                     FilledIconButton(
                         onClick = {
                             val text = inputText.trim()
+                            if (text.isBlank() || slowRemaining > 0) return@FilledIconButton
                             inputText   = ""
                             pendingText = ""
                             scope.launch {
+                               slowRemaining = slowModeSecs  // optimistic countdown start
                                val replyTarget = replyingTo
                                if (replyTarget != null) {
                                    repo.sendReply(channelId, text, replyTarget.id)
@@ -570,10 +606,16 @@ fun ChatScreen(
                                    repo.sendMessage(channelId, text)
                                        .onFailure { sendError = "Failed: ${it.message}" }
                                }
+                               // Tick down after actual send
+                               while (true) {
+                                   delay(1_000)
+                                   slowRemaining = repo.slowModeRemainingSeconds(channelId)
+                                   if (slowRemaining <= 0) break
+                               }
                             }
                         },
                         modifier = Modifier.height(40.dp).width(40.dp),
-                        enabled = inputText.isNotBlank()
+                        enabled = inputText.isNotBlank() && slowRemaining <= 0
                     ) {
                         Text("▶", fontSize = 18.sp)
                     }
@@ -582,6 +624,43 @@ fun ChatScreen(
             }
         }
     }
+}
+
+// ── Spoiler text: blurred until tapped ─────────────────────────────────────
+
+@Composable
+private fun SpoilerText(text: String, revealOnTap: Boolean) {
+    var revealed by remember { mutableStateOf(false) }
+    val modifier = if (revealOnTap) Modifier.clickable { revealed = true } else Modifier
+    Box(modifier = modifier) {
+        Text(
+            text  = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (revealed) MaterialTheme.colorScheme.onSurface
+                    else          MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)
+        )
+        if (!revealed) {
+            // Draw a solid pill over the text
+            Text(
+                text  = text.map { if (it == ' ') ' ' else '█' }.joinToString(""),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// ── Helper: rewrite animated emoji insert text as a raw GIF URL ──────────────
+
+/**
+ * When "send animated emoji as GIF" is enabled, converts <a:name:id> into
+ * the raw CDN GIF URL so the recipient sees an animated image even without Nitro.
+ * Static and unicode emoji are returned unchanged.
+ */
+private fun rewriteAnimatedEmojiAsGif(insertText: String): String {
+    val animated = Regex("""<a:(\w+):(\d+)>""").find(insertText) ?: return insertText
+    val id = animated.groupValues[2]
+    return "https://cdn.discordapp.com/emojis/$id.gif?size=48&quality=lossless"
 }
 
 // ── Helper: parse "<:name:id>" or "<a:name:id>" or plain unicode into ReactionEmoji ──
@@ -695,6 +774,8 @@ private fun MessageBubble(
     isContinuation: Boolean,
     imageLoader: ImageLoader,
     channelNames: Map<String, String> = emptyMap(),
+    compactMode: Boolean = false,
+    spoilerRevealOnTap: Boolean = true,
     onReact: (ReactionEmoji) -> Unit,
     onSwipeLeft: () -> Unit,
     onLongPress: () -> Unit
@@ -746,10 +827,14 @@ private fun MessageBubble(
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        if (!isOwn && !isContinuation) {
-            DiscordAvatar(url = msg.author.avatarUrl(32), displayName = msg.author.displayName, imageLoader = imageLoader, size = 22.dp)
+        if (!compactMode && !isOwn && !isContinuation) {
+            DiscordAvatarWithDecoration(
+                user = msg.author,
+                imageLoader = imageLoader,
+                size = 22.dp
+            )
             Spacer(Modifier.width(4.dp))
-        } else if (!isOwn) {
+        } else if (!compactMode && !isOwn) {
             // Indent to align with messages that have an avatar
             Spacer(Modifier.width(26.dp))
         }
@@ -856,7 +941,14 @@ private fun MessageBubble(
                     val fwdText = msg.forwardedContent?.takeIf { it.isNotBlank() }
                         ?: msg.referencedMessage?.content?.takeIf { it.isNotBlank() }
                     if (!fwdText.isNullOrBlank()) {
-                        MessageContent(content = fwdText, imageLoader = imageLoader, context = context, userNames = userNames, channelNames = channelNames)
+                        MessageContent(
+                            content = fwdText,
+                            imageLoader = imageLoader,
+                            context = context,
+                            userNames = userNames,
+                            channelNames = channelNames,
+                            spoilerRevealOnTap = spoilerRevealOnTap
+                        )
                     }
                     // Forwarded attachments (from snapshot first, then referenced_message)
                     val fwdAtts = msg.forwardedAttachments.ifEmpty {
@@ -889,7 +981,14 @@ private fun MessageBubble(
             } else {
                 // Normal message content
                 if (msg.content.isNotBlank()) {
-                    MessageContent(content = msg.content, imageLoader = imageLoader, context = context, userNames = userNames, channelNames = channelNames)
+                    MessageContent(
+                        content = msg.content,
+                        imageLoader = imageLoader,
+                        context = context,
+                        userNames = userNames,
+                        channelNames = channelNames,
+                        spoilerRevealOnTap = spoilerRevealOnTap
+                    )
                 }
             }
 
@@ -933,7 +1032,8 @@ private fun MessageContent(
     context: Context,
     userNames: Map<String, String> = emptyMap(),
     roleNames: Map<String, String> = emptyMap(),
-    channelNames: Map<String, String> = emptyMap()
+    channelNames: Map<String, String> = emptyMap(),
+    spoilerRevealOnTap: Boolean = true
 ) {
     val parts = remember(content, userNames, roleNames, channelNames) {
         ContentParser.parse(content, userNames, roleNames, channelNames)
@@ -943,7 +1043,34 @@ private fun MessageContent(
         parts.forEach { part ->
             when (part) {
                 is ContentParser.Part.PlainText -> {
-                    Text(text = part.text, style = MaterialTheme.typography.bodySmall)
+                    // Parse markdown spans within the plain-text segment
+                    val spans = ContentParser.parseMarkdown(part.text)
+                    spans.forEach { span ->
+                        if (span.spoiler) {
+                            SpoilerText(span.text, spoilerRevealOnTap)
+                        } else {
+                            val annotated = buildAnnotatedString {
+                                val style = SpanStyle(
+                                    fontWeight = if (span.bold) androidx.compose.ui.text.font.FontWeight.Bold
+                                                 else null,
+                                    fontStyle  = if (span.italic) androidx.compose.ui.text.font.FontStyle.Italic
+                                                 else null,
+                                    textDecoration = when {
+                                        span.strikethrough -> TextDecoration.LineThrough
+                                        else               -> null
+                                    },
+                                    background = if (span.code)
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    else androidx.compose.ui.graphics.Color.Unspecified,
+                                    fontFamily = if (span.code)
+                                        androidx.compose.ui.text.font.FontFamily.Monospace
+                                    else null
+                                )
+                                withStyle(style) { append(span.text) }
+                            }
+                            Text(text = annotated, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
                 is ContentParser.Part.CustomEmoji -> {
                     AsyncImage(
@@ -1222,6 +1349,25 @@ private fun AudioAttachment(att: Attachment) {
     }
 }
 
+
+@Composable
+private fun DiscordAvatarWithDecoration(user: com.zaffox.discordwear.api.DiscordUser, imageLoader: ImageLoader, size: Dp) {
+    val decorUrl = user.avatarDecorationUrl()
+    Box(contentAlignment = Alignment.Center) {
+        DiscordAvatar(url = user.avatarUrl(32), displayName = user.displayName, imageLoader = imageLoader, size = size)
+        if (decorUrl != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(decorUrl).crossfade(false).build(),
+                imageLoader        = imageLoader,
+                contentDescription = null,
+                contentScale       = ContentScale.Fit,
+                // Decoration frame is slightly larger than the avatar
+                modifier           = Modifier.size(size * 1.4f)
+            )
+        }
+    }
+}
 
 @Composable
 private fun DiscordAvatar(url: String?, displayName: String, imageLoader: ImageLoader, size: Dp) {
