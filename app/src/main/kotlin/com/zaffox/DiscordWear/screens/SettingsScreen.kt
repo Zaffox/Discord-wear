@@ -22,17 +22,27 @@ fun SettingsScreen(
     val scope     = rememberCoroutineScope()
     val repo      = context.discordApp.repository
 
-    // Load persisted preferences
+    // ── Persisted preferences ─────────────────────────────────────────────────
     var hideInaccessible by remember {
         mutableStateOf(SetupPreferences.getHideInaccessibleChannels(context))
+    }
+    var sendAnimatedAsGif by remember {
+        mutableStateOf(SetupPreferences.getSendAnimatedAsGif(context))
+    }
+    var spoilerRevealOnTap by remember {
+        mutableStateOf(SetupPreferences.getSpoilerRevealOnTap(context))
+    }
+    var showMentionBadges by remember {
+        mutableStateOf(SetupPreferences.getShowMentionBadges(context))
+    }
+    var compactMode by remember {
+        mutableStateOf(SetupPreferences.getCompactMode(context))
     }
 
     var showLogoutConfirm by remember { mutableStateOf(false) }
 
     if (showLogoutConfirm) {
-        // Confirmation dialog before logout
         ScreenScaffold(scrollState = rememberScalingLazyListState()) {
-        
             ScalingLazyColumn(modifier = Modifier.fillMaxSize()) {
                 item {
                     Text(
@@ -81,6 +91,7 @@ fun SettingsScreen(
 
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+
             item {
                 Text(
                     "Settings",
@@ -90,7 +101,16 @@ fun SettingsScreen(
                 )
             }
 
-            // ── Hide inaccessible channels toggle ─────────────────────────────
+            // ── General section label ─────────────────────────────────────────
+            item {
+                Text(
+                    "GENERAL",
+                    style  = MaterialTheme.typography.labelSmall,
+                    color  = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp)
+                )
+            }
+
             item {
                 SwitchButton(
                     modifier = Modifier.fillMaxWidth().height(40.dp),
@@ -103,7 +123,92 @@ fun SettingsScreen(
                 )
             }
 
-            // ── Log out ───────────────────────────────────────────────────────
+            item {
+                SwitchButton(
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    checked  = showMentionBadges,
+                    onCheckedChange = {
+                        showMentionBadges = it
+                        SetupPreferences.setShowMentionBadges(context, it)
+                    },
+                    label    = { Text("Show mention badges", style = MaterialTheme.typography.bodySmall) }
+                )
+            }
+
+            item {
+                SwitchButton(
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    checked  = compactMode,
+                    onCheckedChange = {
+                        compactMode = it
+                        SetupPreferences.setCompactMode(context, it)
+                    },
+                    label    = { Text("Compact messages", style = MaterialTheme.typography.bodySmall) }
+                )
+            }
+
+            // ── Vencord section label ─────────────────────────────────────────
+            item {
+                Text(
+                    "VENCORD",
+                    style  = MaterialTheme.typography.labelSmall,
+                    color  = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp)
+                )
+            }
+
+            item {
+                SwitchButton(
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    checked  = sendAnimatedAsGif,
+                    onCheckedChange = {
+                        sendAnimatedAsGif = it
+                        SetupPreferences.setSendAnimatedAsGif(context, it)
+                    },
+                    label    = {
+                        Column {
+                            Text("Send animated emoji as GIF", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Posts a GIF link instead of <a:emoji:id>",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                )
+            }
+
+            item {
+                SwitchButton(
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    checked  = spoilerRevealOnTap,
+                    onCheckedChange = {
+                        spoilerRevealOnTap = it
+                        SetupPreferences.setSpoilerRevealOnTap(context, it)
+                    },
+                    label    = {
+                        Column {
+                            Text("Spoiler reveal on tap", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "||spoiler|| text hidden until tapped",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                )
+            }
+
+            // ── Account section ───────────────────────────────────────────────
+            item {
+                Text(
+                    "ACCOUNT",
+                    style  = MaterialTheme.typography.labelSmall,
+                    color  = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp)
+                )
+            }
+
             item {
                 Button(
                     onClick  = { showLogoutConfirm = true },
@@ -112,7 +217,6 @@ fun SettingsScreen(
                 ) { Text("Log Out") }
             }
 
-            // ── About ─────────────────────────────────────────────────────────
             item {
                 Text(
                     "DiscordWear Alpha",
