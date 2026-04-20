@@ -12,13 +12,6 @@ import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import com.zaffox.discordwear.screens.*
 
 class MainActivity : ComponentActivity() {
-
-    /**
-     * Tracks the channelId currently shown in ChatScreen so onResume knows
-     * which channel to refresh. Null when not in a chat.
-     */
-    var activeChannelId: String? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -27,6 +20,8 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
+                // AppScaffold owns TimeText for the whole app — ScreenScaffold
+                // on each screen does NOT need its own timeText parameter.
                 AppScaffold(timeText = { TimeText() }) {
                     val navController = rememberSwipeDismissableNavController()
                     SwipeDismissableNavHost(
@@ -70,21 +65,12 @@ class MainActivity : ComponentActivity() {
                             val channelName = back.arguments?.getString("channelName") ?: channelId
                             val guildIdArg  = back.arguments?.getString("guildId")
                             val guildId     = if (guildIdArg == "dm") null else guildIdArg
-
-                            // Track active channel for onResume refresh
-                            activeChannelId = channelId
-
-                            ChatScreen(
-                                channelId   = channelId,
-                                channelName = channelName,
-                                guildId     = guildId
-                            )
+                            ChatScreen(channelId = channelId, channelName = channelName, guildId = guildId)
                         }
 
                         composable("ServerChannels/{guildId}/{guildName}") { back ->
                             val guildId   = back.arguments?.getString("guildId")   ?: return@composable
                             val guildName = back.arguments?.getString("guildName") ?: guildId
-                            activeChannelId = null   // not in a chat
                             ServerChannels(
                                 guildId                = guildId,
                                 guildName              = guildName,
@@ -95,14 +81,12 @@ class MainActivity : ComponentActivity() {
                         }
 
                         composable("DMs") {
-                            activeChannelId = null
                             DmsScreen(onNavigateToChatScreen = { chId, chName ->
                                 navController.navigate("chatscreen/$chId/$chName/dm")
                             })
                         }
 
                         composable("servers") {
-                            activeChannelId = null
                             ServerScreen(onNavigateToChannels = { gId, gName ->
                                 navController.navigate("ServerChannels/$gId/$gName")
                             })
@@ -111,15 +95,5 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    /**
-     * Called when the app returns to the foreground from the background.
-     * Triggers a message refresh so messages sent while the screen was off
-     * appear immediately without waiting for the next gateway event.
-     */
-    override fun onResume() {
-        super.onResume()
-        discordApp.repository?.refreshOnResume(activeChannelId)
     }
 }
