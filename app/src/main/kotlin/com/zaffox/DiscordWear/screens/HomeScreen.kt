@@ -12,9 +12,6 @@ import androidx.wear.compose.material3.*
 import com.zaffox.discordwear.SetupPreferences
 import com.zaffox.discordwear.api.Ping
 import com.zaffox.discordwear.discordApp
-import com.zaffox.discordwear.R
-import androidx.compose.ui.res.painterResource
-
 
 @Composable
 fun HomeScreen(
@@ -95,16 +92,12 @@ fun HomeScreen(
                 }
             }
             item {
-                FilledIconButton(
-                        onClick  = onNavigateToSettings,
-                        modifier = Modifier.height(40.dp).width(40.dp),
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.settings),
-                            contentDescription = "Settings"
-                        )
-                    }
-              }
+                Button(
+                    modifier = Modifier,
+                    onClick  = onNavigateToSettings,
+                    colors   = ButtonDefaults.filledTonalButtonColors()
+                ) { Text("Settings") }//set to gear icon later, emoji too inconstant
+            }
         }
     }
 }

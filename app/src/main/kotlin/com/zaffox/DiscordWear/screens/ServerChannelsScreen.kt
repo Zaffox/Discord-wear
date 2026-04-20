@@ -6,7 +6,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -16,26 +15,10 @@ import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
 import com.zaffox.discordwear.SetupPreferences
-import com.zaffox.discordwear.api.ChannelUnreadState
 import com.zaffox.discordwear.api.CategoryGroup
 import com.zaffox.discordwear.api.Channel
-import com.zaffox.discordwear.api.ChannelType
 import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
-
-/** Returns the icon prefix for a channel based on its type and name. */
-private fun channelIcon(ch: Channel, allChannels: List<Channel>): String {
-    return when {
-        // Announcement / News channel
-        ch.type == ChannelType.GUILD_NEWS -> "📣"
-        // Rules channel heuristic: named "rules", "rules-and-info", "server-rules", etc.
-        // Also only show 🔖 for the FIRST rules-named channel across the whole server.
-        ch.name.contains("rule", ignoreCase = true) &&
-            allChannels.firstOrNull { it.name.contains("rule", ignoreCase = true) }?.id == ch.id -> "📋"
-        // Default text channel
-        else -> "#"
-    }
-}
 
 @Composable
 fun ServerChannels(
@@ -48,25 +31,28 @@ fun ServerChannels(
     val listState = rememberScalingLazyListState()
     val scope     = rememberCoroutineScope()
 
-    // Read setting: hide channels user has no access to
-    val hideInaccessible  = remember { SetupPreferences.getHideInaccessibleChannels(context) }
-    val showMentionBadges = remember { SetupPreferences.getShowMentionBadges(context) }
-    val readState by (repo?.readState ?: return).collectAsState()
+    val hideInaccessible = remember { SetupPreferences.getHideInaccessibleChannels(context) }
 
     var groups  by remember { mutableStateOf<List<CategoryGroup>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error   by remember { mutableStateOf("") }
 
+    val readState by (repo?.readState ?: return).collectAsState()
+    val pings     by repo.pings.collectAsState()
+
+    // Build a map of channelId -> ping count from current pings list
+    val pingsByChannel = remember(pings) {
+        pings.groupBy { it.message.channelId }.mapValues { it.value.size }
+    }
+
     LaunchedEffect(guildId) {
         scope.launch {
-            // Load cached channels first so the list shows instantly
             val cached = repo?.getCachedChannels(guildId, hideInaccessible)
             if (!cached.isNullOrEmpty()) {
                 groups = cached
                 loading = false
                 repo?.cacheChannelNames(cached)
             }
-            // Then refresh from network
             repo?.rest?.getGuildChannels(guildId, filterInaccessible = hideInaccessible)
                 ?.onSuccess {
                     groups = it
@@ -81,11 +67,7 @@ fun ServerChannels(
         }
     }
 
-    // Flat list of all channels for rules-channel detection (only one rules channel per server)
-    val allChannels = remember(groups) { groups.flatMap { it.channels } }
-
     ScreenScaffold(scrollState = listState) {
-    
         ScalingLazyColumn(state = listState) {
             item {
                 Text(guildName, style = MaterialTheme.typography.titleMedium)
@@ -93,7 +75,7 @@ fun ServerChannels(
 
             when {
                 loading -> item { CircularProgressIndicator() }
-                error.isNotEmpty()  -> item {
+                error.isNotEmpty() -> item {
                     Text(error, color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
@@ -120,62 +102,24 @@ fun ServerChannels(
 
                         items(group.channels.size) { idx ->
                             val ch = group.channels[idx]
-                            val icon = channelIcon(ch, allChannels)
+                            // Only show channels where the user has access
                             if (ch.hasAccess) {
-                                val unread = if (showMentionBadges) readState[ch.id] else null
-                                val mentionCount = unread?.mentionCount ?: 0
-                                Button(
-                                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                                    colors   = ButtonDefaults.filledTonalButtonColors(),
-                                    onClick  = { onNavigateToChatScreen(ch.id, ch.name) }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            text = "$icon ${ch.name}",
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (mentionCount > 0) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
-                                                    .background(Color(0xFFF23F43), CircleShape)
-                                                    .padding(horizontal = 4.dp),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    text = if (mentionCount > 99) "99+" else mentionCount.toString(),
-                                                    color = Color.White,
-                                                    fontSize = 8.sp,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                                )
-                                            }
-                                        } else if (unread != null) {
-                                            // Unread dot (no ping)
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(7.dp)
-                                                    .background(Color.White.copy(alpha = 0.8f), CircleShape)
-                                            )
-                                        }
-                                    }
+                                val pingCount = pingsByChannel[ch.id] ?: 0
+                                val hasUnread = run {
+                                    val lastRead = readState[ch.id]
+                                    val lastMsg  = ch.lastMessageId
+                                    // Unread if last message exists and is newer than last read
+                                    lastMsg != null && lastMsg.isNotEmpty() &&
+                                        (lastRead == null || lastMsg > lastRead)
                                 }
-                            } else {
-                                // Inaccessible channel — shown greyed out, not tappable
-                                Button(
-                                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                                    enabled  = false,
-                                    colors   = ButtonDefaults.filledTonalButtonColors(),
-                                    onClick  = {}
-                                ) {
-                                    Text("🔒 ${ch.name}")
-                                }
+                                ChannelButton(
+                                    channel   = ch,
+                                    hasUnread = hasUnread,
+                                    pingCount = pingCount,
+                                    onClick   = { onNavigateToChatScreen(ch.id, ch.name) }
+                                )
                             }
+                            // Channels without access are hidden entirely
                         }
                     }
                 }
@@ -184,3 +128,58 @@ fun ServerChannels(
     }
 }
 
+@Composable
+private fun ChannelButton(
+    channel: Channel,
+    hasUnread: Boolean,
+    pingCount: Int,
+    onClick: () -> Unit
+) {
+    Button(
+        modifier = Modifier.fillMaxWidth().height(36.dp),
+        colors   = if (pingCount > 0)
+            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+        else if (hasUnread)
+            ButtonDefaults.buttonColors()
+        else
+            ButtonDefaults.filledTonalButtonColors(),
+        onClick  = onClick
+    ) {
+        Row(
+            modifier              = Modifier.fillMaxWidth(),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
+                text       = "# ${channel.name}",
+                modifier   = Modifier.weight(1f),
+                fontWeight = if (hasUnread || pingCount > 0) FontWeight.Bold else FontWeight.Normal
+            )
+            if (pingCount > 0) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier         = Modifier
+                        .size(16.dp)
+                        .background(MaterialTheme.colorScheme.error, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text       = if (pingCount > 9) "9+" else pingCount.toString(),
+                        fontSize   = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        color      = MaterialTheme.colorScheme.onError
+                    )
+                }
+            } else if (hasUnread) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                )
+            }
+        }
+    }
+}

@@ -1,51 +1,49 @@
 package com.zaffox.discordwear.screens
 
+import android.app.RemoteInput
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.ui.input.pointer.pointerInput
+ 
+import android.os.Bundle
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
+import androidx.wear.input.RemoteInputIntentHelper
+import androidx.wear.input.wearableExtender
 import coil.ImageLoader
 import coil.compose.AsyncImage
-import coil.compose.SubcomposeAsyncImage
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import coil.request.ImageRequest
 import android.content.Context
-import android.media.MediaPlayer
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.zaffox.discordwear.api.*
 import com.zaffox.discordwear.discordApp
-import com.zaffox.discordwear.SetupPreferences
-import com.zaffox.discordwear.R
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.zaffox.discordwear.R
+
+private const val INPUT_KEY = "message_input"
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -58,8 +56,7 @@ fun ChatScreen(
     val context   = LocalContext.current
     val repo      = context.discordApp.repository
     val listState = rememberScalingLazyListState()
-    val scope          = rememberCoroutineScope()
-    val keyboardController = LocalSoftwareKeyboardController.current
+    val scope     = rememberCoroutineScope()
 
     val imageLoader = remember {
         ImageLoader.Builder(context)
@@ -74,16 +71,11 @@ fun ChatScreen(
     val allMessages by (repo?.messages ?: return).collectAsState()
     val messages = allMessages[channelId].orEmpty()
     val readState by repo.readState.collectAsState()
-    // Collect typing users directly for this channel — avoids stale map lookups
-    val typingSet by repo.typingInChannel(channelId).collectAsState(initial = emptySet())
 
-    var loading      by remember { mutableStateOf(true) }
+    var loading      by remember { mutableStateOf(messages.isEmpty()) }
     var sendError    by remember { mutableStateOf("") }
     var showPicker   by remember { mutableStateOf(false) }
     var tab          by remember { mutableStateOf(0) } // 0 = emoji, 1 = stickers
-
-    // Text field input state
-    var inputText    by remember { mutableStateOf("") }
 
     // Pending text to send (emoji/text composed before sending)
     var pendingText  by remember { mutableStateOf("") }
@@ -100,145 +92,123 @@ fun ChatScreen(
     val currentUser by repo.currentUser.collectAsState()
     val myId = currentUser?.id ?: currentUserId
     val hasNitro = currentUser?.hasNitro ?: false
-    val typingUsers = typingSet.filter { it != myId }
-
-    // Vencord / custom settings
-    val sendAnimatedAsGif  = remember { SetupPreferences.getSendAnimatedAsGif(context) }
-    val spoilerRevealOnTap = remember { SetupPreferences.getSpoilerRevealOnTap(context) }
-    val compactMode        = remember { SetupPreferences.getCompactMode(context) }
-
-    // Slowmode — how many seconds must elapse between sends
-    val slowModeSecs  = remember(channelId) { repo.getSlowModeSeconds(channelId) }
-    var slowRemaining by remember { mutableStateOf(0) }
-    // Tick the slowmode countdown every second while active
-    LaunchedEffect(slowModeSecs) {
-        if (slowModeSecs > 0) {
-            while (true) {
-                slowRemaining = repo.slowModeRemainingSeconds(channelId)
-                if (slowRemaining <= 0) break
-                delay(1_000)
-            }
-        }
-    }
-
-    // Check if the user can send messages in this channel
-    val canSend = remember(channelId) { repo.canSendMessage(channelId) }
 
 
     LaunchedEffect(channelId) {
-        // Always load from REST — never skip. If gateway already delivered some
-        // messages before the screen opened, loadMessages merges them properly.
-        scope.launch {
-            repo.loadMessages(channelId)
+        if (messages.isEmpty()) {
+            scope.launch {
+                repo.loadMessages(channelId)
+                loading = false
+            }
+        } else {
+            // Already have messages cached — mark read up to the latest one
+            messages.lastOrNull()?.id?.let { repo.markChannelRead(channelId, it) }
             loading = false
         }
     }
 
-    // Scroll to first unread message once messages are loaded
+    // Scroll to last-read message once messages are loaded
     val scrolledToUnread = remember { mutableStateOf(false) }
     LaunchedEffect(messages.size, loading) {
         if (!loading && !scrolledToUnread.value && messages.isNotEmpty()) {
             scrolledToUnread.value = true
-            val lastRead = readState[channelId]?.lastMessageId
+            val lastRead = readState[channelId]
             if (lastRead != null) {
-                // Find the first message after the last-read message ID
+                // Find the last message that has been read (id <= lastRead)
                 // Messages are oldest-first; IDs are snowflakes (numerically ordered)
-                val firstUnreadIdx = messages.indexOfFirst { it.id > lastRead }
-                if (firstUnreadIdx > 0) {
-                    // +2 accounts for the channel title item and reply banner items
-                    scope.launch { listState.animateScrollToItem(firstUnreadIdx + 1) }
-                } else if (firstUnreadIdx == -1) {
-                    // All messages are read — scroll to bottom
-                    scope.launch { listState.animateScrollToItem(messages.size) }
+                val lastReadIdx = messages.indexOfLast { it.id <= lastRead }
+                if (lastReadIdx >= 0) {
+                    // +1 accounts for the channel title item
+                    scope.launch { listState.animateScrollToItem(lastReadIdx + 1) }
+                } else {
+                    // All messages are unread — scroll to top of messages
+                    scope.launch { listState.animateScrollToItem(1) }
                 }
             } else {
                 // No read state — scroll to bottom (newest)
-                scope.launch { listState.animateScrollToItem(messages.size) }
+                scope.launch { listState.animateScrollToItem(messages.size + 1) }
             }
         }
     }
 
-    // ── Edit state ────────────────────────────────────────────────────────────
+    // ── Text input launcher ───────────────────────────────────────────────────
+    val inputLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // Only process if user confirmed (RESULT_OK) — back button returns RESULT_CANCELED
+        if (result.resultCode != android.app.Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val bundle: Bundle? = RemoteInput.getResultsFromIntent(
+            result.data ?: return@rememberLauncherForActivityResult
+        )
+        val text = bundle?.getCharSequence(INPUT_KEY)?.toString()?.trim()
+        //if (!text.isNullOrBlank()) {//make it so it does not auto send
+            val combined = if (pendingText.isNotBlank()) "$pendingText $text".trim() else text
+        pendingText = " $combined"
+        /*
+        if (!text.isNullOrBlank()) {
+            val replyTarget = replyingTo
+            val combined = if (pendingText.isNotBlank()) "$pendingText $text".trim() else text
+            scope.launch {
+                if (replyTarget != null) {
+                    repo.sendReply(channelId, combined, replyTarget.id)
+                        .onFailure { sendError = "Failed: ${it.message}" }
+                    replyingTo = null
+                } else {
+                    repo.sendMessage(channelId, combined)
+                        .onFailure { sendError = "Failed: ${it.message}" }
+                }
+                pendingText = ""
+            }
+        }*/
+    }
+
+    fun openInput(replyTarget: DiscordMessage? = null) {
+        val label = if (replyTarget != null)
+            "Reply to ${replyTarget.author.displayName}"
+        else
+            "Message #$channelName"
+        val ri = RemoteInput.Builder(INPUT_KEY)
+            .setLabel(label)
+            .wearableExtender {
+                setEmojisAllowed(true)
+                setInputActionType(android.view.inputmethod.EditorInfo.IME_ACTION_SEND)
+            }.build()
+        val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
+        RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(ri))
+        inputLauncher.launch(intent)
+    }
+
+    // ── Edit input launcher ───────────────────────────────────────────────────
     var editingMsg by remember { mutableStateOf<DiscordMessage?>(null) }
-    var editText   by remember { mutableStateOf("") }
+    val editLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != android.app.Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val bundle: Bundle? = RemoteInput.getResultsFromIntent(
+            result.data ?: return@rememberLauncherForActivityResult
+        )
+        val text = bundle?.getCharSequence(INPUT_KEY)?.toString()?.trim()
+        val target = editingMsg
+        if (!text.isNullOrBlank() && target != null) {
+            scope.launch {
+                repo.editMessage(channelId, target.id, text)
+                    .onFailure { sendError = "Failed: ${it.message}" }
+                editingMsg = null
+            }
+        }
+    }
 
     fun openEdit(msg: DiscordMessage) {
         editingMsg = msg
-        editText   = msg.content
-    }
-
-    // ── Back handler — dismiss keyboard/picker before navigating away ─────────
-    // Only intercept back when an overlay is open; otherwise let it navigate back.
-    BackHandler(enabled = showPicker) {
-        showPicker = false
-        reactingToMsg = null
-    }
-    BackHandler(enabled = editingMsg != null) {
-        editingMsg = null
-        editText = ""
-    }
-
-    // ── Edit message screen ───────────────────────────────────────────────────
-    val msgBeingEdited = editingMsg
-    if (msgBeingEdited != null) {
-        val editListState = rememberScalingLazyListState()
-        ScreenScaffold(scrollState = editListState) {
-            ScalingLazyColumn(state = editListState, modifier = Modifier.fillMaxSize()) {
-                item {
-                    Text(
-                        "Edit message",
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        value           = editText,
-                        onValueChange   = { editText = it },
-                        modifier        = Modifier.fillMaxWidth(),
-                        label           = { Text("Edit", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                        textStyle       = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                        colors          = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                            focusedTextColor   = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            cursorColor        = MaterialTheme.colorScheme.primary
-                        ),
-                        minLines        = 1,
-                        maxLines        = 4,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
-                    )
-                }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        Button(
-                            onClick = {
-                                val text = editText.trim()
-                                if (text.isNotBlank()) {
-                                    scope.launch {
-                                        repo.editMessage(channelId, msgBeingEdited.id, text)
-                                            .onFailure { sendError = "Failed: ${it.message}" }
-                                        editingMsg = null
-                                        editText   = ""
-                                    }
-                                }
-                            },
-                            modifier = Modifier.weight(1f).height(36.dp),
-                            colors   = ButtonDefaults.filledTonalButtonColors(),
-                            enabled  = editText.isNotBlank()
-                        ) { Text("Save") }
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick  = { editingMsg = null; editText = "" },
-                            modifier = Modifier.weight(1f).height(36.dp),
-                            colors   = ButtonDefaults.outlinedButtonColors()
-                        ) { Text("Cancel") }
-                    }
-                }
-            }
-        }
-        return
+        val ri = RemoteInput.Builder(INPUT_KEY)
+            .setLabel("Edit message")
+            .wearableExtender {
+                setEmojisAllowed(true)
+                setInputActionType(android.view.inputmethod.EditorInfo.IME_ACTION_SEND)
+            }.build()
+        val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
+        RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(ri))
+        editLauncher.launch(intent)
     }
 
     // ── Emoji/sticker picker overlay ──────────────────────────────────────────
@@ -254,6 +224,7 @@ fun ChatScreen(
                 val target = reactingToMsg
                 if (target != null) {
                     // React mode: toggle reaction with the picked emoji
+                    // insertText is like "<:name:id>" — extract for custom emoji, or raw unicode
                     val reactionEmoji = parseInsertTextToReactionEmoji(insertText)
                     if (reactionEmoji != null) {
                         scope.launch {
@@ -266,13 +237,9 @@ fun ChatScreen(
                     }
                     reactingToMsg = null
                 } else {
-                    // Normal mode: optionally rewrite animated emoji as raw GIF link
-                    val finalText = if (sendAnimatedAsGif) {
-                        rewriteAnimatedEmojiAsGif(insertText)
-                    } else insertText
-                    val newText = if (inputText.isBlank()) finalText else "$inputText$finalText"
-                    inputText   = newText
-                    pendingText = newText
+                    // Normal mode: append emoji to pending text, do NOT send yet
+                    pendingText = if (pendingText.isBlank()) insertText
+                                  else "$pendingText$insertText"
                 }
             },
             onUnicodeEmojiPicked = { unicode ->
@@ -286,9 +253,7 @@ fun ChatScreen(
                     }
                     reactingToMsg = null
                 } else {
-                    val newText = if (inputText.isBlank()) unicode else "$inputText$unicode"
-                    inputText   = newText
-                    pendingText = newText
+                    pendingText = if (pendingText.isBlank()) unicode else "$pendingText$unicode"
                 }
             },
             onStickerPicked = { stickerId ->
@@ -315,7 +280,7 @@ fun ChatScreen(
             onReply = {
                 replyingTo  = msgForOptions
                 selectedMsg = null
-                // Focus is on the text field — no need to launch an intent
+                openInput(msgForOptions)
             },
             onCopy  = {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
@@ -348,13 +313,23 @@ fun ChatScreen(
     }
 
     // ── Main chat view ────────────────────────────────────────────────────────
-    ScreenScaffold(scrollState = listState) {
-        ScalingLazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-            item(key = "channel_title") { Text("#$channelName", style = MaterialTheme.typography.titleMedium) }
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems  = layoutInfo.totalItemsCount
+            totalItems == 0 || lastVisible >= totalItems - 1
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        ScreenScaffold(scrollState = listState) {
+            ScalingLazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            item { Text("#$channelName", style = MaterialTheme.typography.titleMedium) }
 
             // Reply indicator banner
             if (replyingTo != null) {
-                item(key = "reply_banner") {
+                item {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -382,9 +357,9 @@ fun ChatScreen(
                 }
             }
 
-            // Pending text preview (shown when text is typed but not yet sent)
+            // Pending text preview
             if (pendingText.isNotBlank()) {
-                item(key = "pending_text") {
+                item {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -408,17 +383,12 @@ fun ChatScreen(
                             Text(
                                 "▶",
                                 style    = MaterialTheme.typography.labelSmall,
-                                color    = if (slowRemaining > 0)
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                else MaterialTheme.colorScheme.primary,
+                                color    = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .clickable {
-                                        if (slowRemaining > 0) return@clickable
                                         val text = pendingText
                                         pendingText = ""
-                                        inputText   = ""
                                         scope.launch {
-                                            slowRemaining = slowModeSecs
                                             val replyTarget = replyingTo
                                             if (replyTarget != null) {
                                                 repo.sendReply(channelId, text, replyTarget.id)
@@ -427,11 +397,6 @@ fun ChatScreen(
                                             } else {
                                                 repo.sendMessage(channelId, text)
                                                     .onFailure { sendError = "Failed: ${it.message}" }
-                                            }
-                                            while (true) {
-                                                delay(1_000)
-                                                slowRemaining = repo.slowModeRemainingSeconds(channelId)
-                                                if (slowRemaining <= 0) break
                                             }
                                         }
                                     }
@@ -443,10 +408,7 @@ fun ChatScreen(
                                 style    = MaterialTheme.typography.labelSmall,
                                 color    = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
-                                    .clickable {
-                                        pendingText = ""
-                                        inputText   = ""
-                                    }
+                                    .clickable { pendingText = "" }
                                     .padding(4.dp)
                             )
                         }
@@ -455,110 +417,52 @@ fun ChatScreen(
             }
 
             when {
-                loading -> item(key = "loading") { CircularProgressIndicator() }
-                messages.isEmpty() -> item(key = "empty") {
+                loading -> item { CircularProgressIndicator() }
+                messages.isEmpty() -> item {
                     Text("No messages yet.", style = MaterialTheme.typography.bodySmall)
                 }
-                else -> items(messages.size, key = { messages[it].id }) { index ->
-                    val msg     = messages[index]
-                    val prevMsg = if (index > 0) messages[index - 1] else null
-
-                    // Parse ISO-8601 timestamps to epoch millis for gap comparison
-                    fun String.toEpochMillis(): Long = runCatching {
-                        java.time.OffsetDateTime.parse(this).toInstant().toEpochMilli()
-                    }.getOrElse { 0L }
-
-                    val gapMs = if (prevMsg != null)
-                        msg.timestamp.toEpochMillis() - prevMsg.timestamp.toEpochMillis()
-                    else Long.MAX_VALUE
-
-                    val isContinuation = prevMsg != null &&
-                        prevMsg.author.id == msg.author.id &&
-                        msg.type !in listOf(19, 23) &&
-                        prevMsg.type !in listOf(19, 23) &&
-                        gapMs < 10 * 60 * 1000L  // break group after 10 minutes
-
+                else -> items(messages.size) { index ->
                     MessageBubble(
-                        msg            = msg,
-                        isOwn          = msg.author.id == myId,
-                        isContinuation = isContinuation,
-                        imageLoader    = imageLoader,
-                        channelNames   = repo.getChannelNames(),
-                        compactMode    = compactMode,
-                        spoilerRevealOnTap = spoilerRevealOnTap,
-                        onReact        = { emoji ->
-                            scope.launch { repo.toggleReaction(channelId, msg.id, emoji) }
+                        msg         = messages[index],
+                        isOwn       = messages[index].author.id == myId,
+                        imageLoader = imageLoader,
+                        onReact     = { emoji ->
+                            scope.launch { repo.toggleReaction(channelId, messages[index].id, emoji) }
                         },
-                        onSwipeLeft    = {
-                            replyingTo = msg
+                        onSwipeLeft = {
+                            replyingTo = messages[index]
+                            openInput(messages[index])
                         },
-                        onLongPress    = {
-                            selectedMsg = msg
+                        onLongPress = {
+                            selectedMsg = messages[index]
                         }
                     )
                 }
             }
 
             if (sendError.isNotEmpty()) {
-                item(key = "send_error") {
+                item {
                     Text(sendError, color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
 
-            // ── Typing indicator ──────────────────────────────────────────────
-            if (typingUsers.isNotEmpty()) {
-                item(key = "typing_indicator") {
-                    val names = typingUsers.mapNotNull { uid -> repo?.getDisplayName(uid) }
-                    val label = when {
-                        names.isEmpty() -> "Someone is typing…"
-                        names.size == 1 -> "${names[0]} is typing…"
-                        names.size == 2 -> "${names[0]} and ${names[1]} are typing…"
-                        else            -> "Several people are typing…"
+            // ── Action buttons ────────────────────────────────────────────────
+            item {
+                Button(
+                    onClick  = { openInput() },
+                    modifier = Modifier.fillMaxWidth().height(36.dp),
+                    colors   = ButtonDefaults.filledTonalButtonColors()
+                ) { 
+                    if (pendingText == "") {
+                        Text("Message #$channelName") 
+                    } else {
+                        Text("$pendingText")
                     }
-                    Text(
-                        text  = label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
-                    )
+                  
                 }
             }
-
-            // ── Text input field (GBoard / system keyboard) ───────────────────
-            item(key = "text_input") {
-                if (canSend) {
-                    OutlinedTextField(
-                        value           = inputText,
-                        onValueChange   = { newValue ->
-                            inputText   = newValue
-                            pendingText = newValue
-                        },
-                        modifier        = Modifier.fillMaxWidth(),
-                        placeholder     = { Text("Message #$channelName", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                        textStyle       = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                        colors          = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                            focusedTextColor   = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            cursorColor        = MaterialTheme.colorScheme.primary
-                        ),
-                        minLines        = 1,
-                        maxLines        = 4,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
-                    )
-                } else {
-                    Text(
-                        text     = "🔒 You cannot send messages here",
-                        style    = MaterialTheme.typography.labelSmall,
-                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                    )
-                }
-            }
-
-            // ── Action buttons (only when user can send) ──────────────────────
-            item(key = "action_buttons") {
-                if (canSend) {
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
@@ -572,7 +476,7 @@ fun ChatScreen(
                         modifier = Modifier.height(40.dp).width(40.dp),
                     ) {
                         Icon(
-                            painter = painterResource(id = R.drawable.emoji),
+                           painter = painterResource(id = R.drawable.emoji),
                             contentDescription = "Emoji"
                         )
                     }
@@ -591,12 +495,9 @@ fun ChatScreen(
                     }
                     FilledIconButton(
                         onClick = {
-                            val text = inputText.trim()
-                            if (text.isBlank() || slowRemaining > 0) return@FilledIconButton
-                            inputText   = ""
+                            val text = pendingText
                             pendingText = ""
                             scope.launch {
-                               slowRemaining = slowModeSecs  // optimistic countdown start
                                val replyTarget = replyingTo
                                if (replyTarget != null) {
                                    repo.sendReply(channelId, text, replyTarget.id)
@@ -606,61 +507,35 @@ fun ChatScreen(
                                    repo.sendMessage(channelId, text)
                                        .onFailure { sendError = "Failed: ${it.message}" }
                                }
-                               // Tick down after actual send
-                               while (true) {
-                                   delay(1_000)
-                                   slowRemaining = repo.slowModeRemainingSeconds(channelId)
-                                   if (slowRemaining <= 0) break
-                               }
                             }
                         },
                         modifier = Modifier.height(40.dp).width(40.dp),
-                        enabled = inputText.isNotBlank() && slowRemaining <= 0
+                        enabled = pendingText.isNotBlank()
                     ) {
                         Text("▶", fontSize = 18.sp)
                     }
                 }
-                } // end if (canSend)
+            }
+        }
+        }
+
+        // ── Scroll-to-bottom floating button ─────────────────────────────────
+        if (!isAtBottom) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 8.dp),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                FilledIconButton(
+                    onClick  = { scope.launch { listState.animateScrollToItem(Int.MAX_VALUE) } },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Text("↓", fontSize = 14.sp)
+                }
             }
         }
     }
-}
-
-// ── Spoiler text: blurred until tapped ─────────────────────────────────────
-
-@Composable
-private fun SpoilerText(text: String, revealOnTap: Boolean) {
-    var revealed by remember { mutableStateOf(false) }
-    val modifier = if (revealOnTap) Modifier.clickable { revealed = true } else Modifier
-    Box(modifier = modifier) {
-        Text(
-            text  = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (revealed) MaterialTheme.colorScheme.onSurface
-                    else          MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)
-        )
-        if (!revealed) {
-            // Draw a solid pill over the text
-            Text(
-                text  = text.map { if (it == ' ') ' ' else '█' }.joinToString(""),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-// ── Helper: rewrite animated emoji insert text as a raw GIF URL ──────────────
-
-/**
- * When "send animated emoji as GIF" is enabled, converts <a:name:id> into
- * the raw CDN GIF URL so the recipient sees an animated image even without Nitro.
- * Static and unicode emoji are returned unchanged.
- */
-private fun rewriteAnimatedEmojiAsGif(insertText: String): String {
-    val animated = Regex("""<a:(\w+):(\d+)>""").find(insertText) ?: return insertText
-    val id = animated.groupValues[2]
-    return "https://cdn.discordapp.com/emojis/$id.gif?size=48&quality=lossless"
 }
 
 // ── Helper: parse "<:name:id>" or "<a:name:id>" or plain unicode into ReactionEmoji ──
@@ -771,27 +646,18 @@ private fun MessageOptionsDialog(
 private fun MessageBubble(
     msg: DiscordMessage,
     isOwn: Boolean,
-    isContinuation: Boolean,
     imageLoader: ImageLoader,
-    channelNames: Map<String, String> = emptyMap(),
-    compactMode: Boolean = false,
-    spoilerRevealOnTap: Boolean = true,
     onReact: (ReactionEmoji) -> Unit,
     onSwipeLeft: () -> Unit,
     onLongPress: () -> Unit
 ) {
     val context = LocalContext.current
-
-    // Build user name map from this message's mentioned users list
-    val userNames = remember(msg.mentionedUsers) {
-        msg.mentionedUsers.associate { it.id to it.displayName }
-    }
     var offsetX by remember { mutableStateOf(0f) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = if (isContinuation) 0.dp else 4.dp, bottom = 2.dp)
+            .padding(vertical = 2.dp)
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragEnd = {
@@ -827,64 +693,20 @@ private fun MessageBubble(
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        if (!compactMode && !isOwn && !isContinuation) {
-            DiscordAvatarWithDecoration(
-                user = msg.author,
-                imageLoader = imageLoader,
-                size = 22.dp
-            )
+        if (!isOwn) {
+            DiscordAvatar(url = msg.author.avatarUrl(32), imageLoader = imageLoader, size = 22.dp)
             Spacer(Modifier.width(4.dp))
-        } else if (!compactMode && !isOwn) {
-            // Indent to align with messages that have an avatar
-            Spacer(Modifier.width(26.dp))
         }
 
         Column(
             horizontalAlignment = Alignment.Start,
             modifier = Modifier.widthIn(max = 155.dp)
         ) {
-            if (!isContinuation) {
-                // Format timestamp respecting device timezone and 12/24hr system setting
-                val timeLabel = remember(msg.timestamp) {
-                    runCatching {
-                        val instant = java.time.OffsetDateTime.parse(msg.timestamp).toInstant()
-                        val zoned   = instant.atZone(java.time.ZoneId.systemDefault())
-                        val now     = java.time.ZonedDateTime.now()
-                        val use24   = android.text.format.DateFormat.is24HourFormat(context)
-                        val timeFmt = if (use24)
-                            java.time.format.DateTimeFormatter.ofPattern("HH:mm")
-                        else
-                            java.time.format.DateTimeFormatter.ofPattern("h:mma")
-                        val timeStr = zoned.format(timeFmt).lowercase()
-
-                        val todayDate     = now.toLocalDate()
-                        val yesterdayDate = todayDate.minusDays(1)
-                        when (zoned.toLocalDate()) {
-                            todayDate     -> timeStr
-                            yesterdayDate -> "Yesterday $timeStr"
-                            else          -> "${zoned.monthValue}/${zoned.dayOfMonth} $timeStr"
-                        }
-                    }.getOrElse { "" }
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text  = msg.author.displayName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (timeLabel.isNotEmpty()) {
-                        Text(
-                            text  = timeLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            fontSize = 9.sp
-                        )
-                    }
-                }
-            }
+            Text(
+                text  = msg.author.displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             // ── Reply reference ───────────────────────────────────────────────
             val ref = msg.referencedMessage
@@ -941,14 +763,7 @@ private fun MessageBubble(
                     val fwdText = msg.forwardedContent?.takeIf { it.isNotBlank() }
                         ?: msg.referencedMessage?.content?.takeIf { it.isNotBlank() }
                     if (!fwdText.isNullOrBlank()) {
-                        MessageContent(
-                            content = fwdText,
-                            imageLoader = imageLoader,
-                            context = context,
-                            userNames = userNames,
-                            channelNames = channelNames,
-                            spoilerRevealOnTap = spoilerRevealOnTap
-                        )
+                        MessageContent(content = fwdText, imageLoader = imageLoader, context = context)
                     }
                     // Forwarded attachments (from snapshot first, then referenced_message)
                     val fwdAtts = msg.forwardedAttachments.ifEmpty {
@@ -981,25 +796,12 @@ private fun MessageBubble(
             } else {
                 // Normal message content
                 if (msg.content.isNotBlank()) {
-                    MessageContent(
-                        content = msg.content,
-                        imageLoader = imageLoader,
-                        context = context,
-                        userNames = userNames,
-                        channelNames = channelNames,
-                        spoilerRevealOnTap = spoilerRevealOnTap
-                    )
+                    MessageContent(content = msg.content, imageLoader = imageLoader, context = context)
                 }
             }
 
             msg.attachments.filter { it.isImage }.forEach { att ->
                 MediaImage(att.proxyUrl, att.filename, imageLoader)
-            }
-            msg.attachments.filter { it.isVideo }.forEach { att ->
-                VideoAttachment(att, imageLoader)
-            }
-            msg.attachments.filter { it.isAudio }.forEach { att ->
-                AudioAttachment(att)
             }
             msg.stickers.filter { it.isDisplayable }.forEach { s ->
                 MediaImage(s.imageUrl, s.name, imageLoader, size = 80.dp)
@@ -1029,48 +831,15 @@ private fun MessageBubble(
 private fun MessageContent(
     content: String,
     imageLoader: ImageLoader,
-    context: Context,
-    userNames: Map<String, String> = emptyMap(),
-    roleNames: Map<String, String> = emptyMap(),
-    channelNames: Map<String, String> = emptyMap(),
-    spoilerRevealOnTap: Boolean = true
+    context: Context
 ) {
-    val parts = remember(content, userNames, roleNames, channelNames) {
-        ContentParser.parse(content, userNames, roleNames, channelNames)
-    }
+    val parts = remember(content) { ContentParser.parse(content) }
 
     FlowRow(modifier = Modifier.fillMaxWidth()) {
         parts.forEach { part ->
             when (part) {
                 is ContentParser.Part.PlainText -> {
-                    // Parse markdown spans within the plain-text segment
-                    val spans = ContentParser.parseMarkdown(part.text)
-                    spans.forEach { span ->
-                        if (span.spoiler) {
-                            SpoilerText(span.text, spoilerRevealOnTap)
-                        } else {
-                            val annotated = buildAnnotatedString {
-                                val style = SpanStyle(
-                                    fontWeight = if (span.bold) androidx.compose.ui.text.font.FontWeight.Bold
-                                                 else null,
-                                    fontStyle  = if (span.italic) androidx.compose.ui.text.font.FontStyle.Italic
-                                                 else null,
-                                    textDecoration = when {
-                                        span.strikethrough -> TextDecoration.LineThrough
-                                        else               -> null
-                                    },
-                                    background = if (span.code)
-                                        MaterialTheme.colorScheme.surfaceContainer
-                                    else androidx.compose.ui.graphics.Color.Unspecified,
-                                    fontFamily = if (span.code)
-                                        androidx.compose.ui.text.font.FontFamily.Monospace
-                                    else null
-                                )
-                                withStyle(style) { append(span.text) }
-                            }
-                            Text(text = annotated, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
+                    Text(text = part.text, style = MaterialTheme.typography.bodySmall)
                 }
                 is ContentParser.Part.CustomEmoji -> {
                     AsyncImage(
@@ -1163,9 +932,11 @@ private fun ReactionChip(reaction: Reaction, imageLoader: ImageLoader, onClick: 
                 )
             } else {
                 // Unicode emoji — render using EmojiCompat/text with explicit emoji font size.
+                // reaction.emoji.name IS the unicode character (e.g. "👍") from the Discord API.
                 Text(
                     text     = reaction.emoji.name,
                     fontSize = 13.sp,
+                    // Disable font scaling so the emoji renders at the correct size
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Default,
                     lineHeight = 14.sp,
                     modifier = Modifier.wrapContentSize()
@@ -1219,200 +990,13 @@ private fun EmbedCard(embed: Embed, imageLoader: ImageLoader) {
 }
 
 @Composable
-private fun VideoAttachment(att: Attachment, imageLoader: ImageLoader) {
-    val context = LocalContext.current
-    // Show a thumbnail (proxy URL) with a play button overlay, tapping opens video externally
-    Box(
-        modifier = Modifier
-            .padding(top = 2.dp)
-            .widthIn(max = 140.dp)
-            .heightIn(max = 100.dp)
-            .clickable {
-                runCatching {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(att.url))
-                        .setDataAndType(Uri.parse(att.url), att.contentType ?: "video/*")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                }
-            }
-    ) {
-        // Thumbnail — Discord provides proxy images for videos with width/height
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(att.proxyUrl)
-                .crossfade(true)
-                .build(),
-            imageLoader        = imageLoader,
-            contentDescription = att.filename,
-            contentScale       = ContentScale.Fit,
-            modifier           = Modifier
-                .widthIn(max = 140.dp)
-                .heightIn(max = 100.dp)
-        )
-        // Play button overlay
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.35f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("▶", fontSize = 22.sp, color = androidx.compose.ui.graphics.Color.White)
-        }
-    }
-    // Filename label
-    Text(
-        text  = att.filename,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1
+private fun DiscordAvatar(url: String, imageLoader: ImageLoader, size: Dp) {
+    AsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(url).crossfade(true).build(),
+        imageLoader        = imageLoader,
+        contentDescription = null,
+        contentScale       = ContentScale.Crop,
+        modifier           = Modifier.size(size)
     )
-}
-
-@Composable
-private fun AudioAttachment(att: Attachment) {
-    val context = LocalContext.current
-    val scope   = rememberCoroutineScope()
-
-    var isPlaying  by remember { mutableStateOf(false) }
-    var progress   by remember { mutableStateOf(0f) }
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-
-    DisposableEffect(att.url) {
-        onDispose {
-            mediaPlayer?.release()
-            mediaPlayer = null
-        }
-    }
-
-    // Progress tracking coroutine
-    LaunchedEffect(isPlaying) {
-        while (isPlaying) {
-            val mp = mediaPlayer
-            if (mp != null && mp.isPlaying) {
-                val dur = mp.duration
-                if (dur > 0) progress = mp.currentPosition.toFloat() / dur.toFloat()
-            }
-            delay(300)
-        }
-    }
-
-    Column(modifier = Modifier.padding(top = 2.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainer,
-                    RoundedCornerShape(8.dp)
-                )
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // Play/pause button
-            Text(
-                text     = if (isPlaying) "⏸" else "▶",
-                fontSize = 16.sp,
-                modifier = Modifier.clickable {
-                    scope.launch {
-                        if (isPlaying) {
-                            mediaPlayer?.pause()
-                            isPlaying = false
-                        } else {
-                            val mp = mediaPlayer ?: MediaPlayer().also {
-                                it.setDataSource(att.url)
-                                it.prepare()
-                                it.setOnCompletionListener { _ ->
-                                    isPlaying = false
-                                    progress  = 0f
-                                }
-                                mediaPlayer = it
-                            }
-                            mp.start()
-                            isPlaying = true
-                        }
-                    }
-                }
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text     = att.filename,
-                    style    = MaterialTheme.typography.labelSmall,
-                    color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(3.dp)
-                )
-            }
-        }
-    }
-}
-
-
-@Composable
-private fun DiscordAvatarWithDecoration(user: com.zaffox.discordwear.api.DiscordUser, imageLoader: ImageLoader, size: Dp) {
-    val decorUrl = user.avatarDecorationUrl()
-    Box(contentAlignment = Alignment.Center) {
-        DiscordAvatar(url = user.avatarUrl(32), displayName = user.displayName, imageLoader = imageLoader, size = size)
-        if (decorUrl != null) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(decorUrl).crossfade(false).build(),
-                imageLoader        = imageLoader,
-                contentDescription = null,
-                contentScale       = ContentScale.Fit,
-                // Decoration frame is slightly larger than the avatar
-                modifier           = Modifier.size(size * 1.4f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun DiscordAvatar(url: String?, displayName: String, imageLoader: ImageLoader, size: Dp) {
-    val initial = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    val blurple = androidx.compose.ui.graphics.Color(0xFF5865F2)
-
-    if (url == null) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .background(color = blurple, shape = CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text     = initial,
-                style    = MaterialTheme.typography.labelSmall,
-                color    = androidx.compose.ui.graphics.Color.White,
-                fontSize = (size.value * 0.45f).sp
-            )
-        }
-    } else {
-        SubcomposeAsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(url)
-                .crossfade(true)
-                .build(),
-            imageLoader        = imageLoader,
-            contentDescription = null,
-            contentScale       = ContentScale.Crop,
-            modifier           = Modifier.size(size).clip(CircleShape),
-            error = {
-                Box(
-                    modifier = Modifier
-                        .size(size)
-                        .background(color = blurple, shape = CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text     = initial,
-                        style    = MaterialTheme.typography.labelSmall,
-                        color    = androidx.compose.ui.graphics.Color.White,
-                        fontSize = (size.value * 0.45f).sp
-                    )
-                }
-            }
-        )
-    }
 }

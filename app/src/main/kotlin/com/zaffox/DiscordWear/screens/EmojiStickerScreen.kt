@@ -176,9 +176,8 @@ fun EmojiStickerScreen(
                                     )
 
                                     if (isLocked) {
-                                        Icon(
-                                            painter = painterResource(id = R.drawable.lock),
-                                            contentDescription = "Locked",
+                                        Text(
+                                            text = "X",
                                             modifier = Modifier
                                                 .size(30.dp)
                                                 .align(Alignment.Center)
