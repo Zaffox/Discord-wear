@@ -74,9 +74,11 @@ fun DmsScreen(
                         presence     = presence,
                         imageLoader  = imageLoader,
                         mentionCount = if (showBadges) readState[dm.id]?.mentionCount ?: 0 else 0,
-                        hasUnread    = showBadges && readState.containsKey(dm.id)
-                            && (dm.lastMessageId != null)
-                            && (readState[dm.id]?.lastMessageId != dm.lastMessageId),
+                        hasUnread    = showBadges && dm.lastMessageId != null && run {
+                            val lastRead = readState[dm.id]?.lastMessageId
+                            // Unread if never opened (no readState entry) or last read is behind newest
+                            lastRead == null || dm.lastMessageId > lastRead
+                        },
                         onClick      = { onNavigateToChatScreen(dm.id, dm.displayName) }
                     )
                 }
@@ -175,14 +177,17 @@ private fun DmButton(
         ) {
             // Avatar with status dot and optional decoration / mention badge
             Box(contentAlignment = Alignment.BottomEnd) {
-                // Avatar circle
-                Box(contentAlignment = Alignment.TopEnd) {
+                // Avatar + decoration layered in a fixed-size box so decoration is centered
+                Box(
+                    modifier         = Modifier.size(52.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Avatar circle (centered inside the 52dp box)
                     if (avatarUrl != null) {
                         SubcomposeAsyncImage(
                             model = ImageRequest.Builder(context).data(avatarUrl).crossfade(true).build(),
                             imageLoader        = imageLoader,
                             contentDescription = null,
-                            alignment = Alignment.CenterEnd,
                             contentScale       = ContentScale.Crop,
                             modifier           = Modifier.size(38.dp).clip(CircleShape),
                             error = {
@@ -198,7 +203,7 @@ private fun DmButton(
                             contentAlignment = Alignment.Center
                         ) { Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
                     }
-                    // Avatar decoration overlay
+                    // Decoration overlay — same 52dp box, so it perfectly frames the 38dp avatar
                     val decorUrl = recipient?.avatarDecorationUrl()
                     if (decorUrl != null) {
                         SubcomposeAsyncImage(
@@ -206,31 +211,30 @@ private fun DmButton(
                             imageLoader        = imageLoader,
                             contentDescription = null,
                             contentScale       = ContentScale.Fit,
-                            modifier           = Modifier.size(52.dp)  // slightly larger to frame the avatar
+                            modifier           = Modifier.size(52.dp)
                         )
                     }
-                    // Mention badge (top-right corner)
+                    // Mention badge (top-right of the 52dp box)
                     if (mentionCount > 0) {
                         Box(
                             modifier = Modifier
-                                .offset(x = 2.dp, y = (-2).dp)
+                                .align(Alignment.TopEnd)
                                 .defaultMinSize(minWidth = 15.dp, minHeight = 15.dp)
                                 .background(Color(0xFFF23F43), CircleShape)
                                 .padding(horizontal = 3.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text     = if (mentionCount > 99) "99+" else mentionCount.toString(),
-                                color    = Color.White,
-                                fontSize = 8.sp,
+                                text       = if (mentionCount > 99) "99+" else mentionCount.toString(),
+                                color      = Color.White,
+                                fontSize   = 8.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     } else if (hasUnread) {
-                        // Small unread dot (no ping)
                         Box(
                             modifier = Modifier
-                                .offset(x = 2.dp, y = (-2).dp)
+                                .align(Alignment.TopEnd)
                                 .size(9.dp)
                                 .background(Color.White, CircleShape)
                         )
