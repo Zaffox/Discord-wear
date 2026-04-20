@@ -80,4 +80,78 @@ object SetupPreferences {
     }
 
     fun isSetupComplete(context: Context): Boolean = getToken(context) != null
+
+    // ── Pinned servers ────────────────────────────────────────────────────────
+    private const val KEY_PINNED_SERVERS = "pinned_servers"
+
+    fun getPinnedServers(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_PINNED_SERVERS, emptySet()) ?: emptySet()
+
+    fun setPinnedServers(context: Context, ids: Set<String>) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit { putStringSet(KEY_PINNED_SERVERS, ids) }
+    }
+
+    fun togglePinnedServer(context: Context, guildId: String): Boolean {
+        val current = getPinnedServers(context).toMutableSet()
+        val pinned = if (current.contains(guildId)) { current.remove(guildId); false }
+                     else { current.add(guildId); true }
+        setPinnedServers(context, current)
+        return pinned
+    }
+
+    // ── Hidden servers ────────────────────────────────────────────────────────
+    private const val KEY_HIDDEN_SERVERS = "hidden_servers"
+
+    fun getHiddenServers(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_HIDDEN_SERVERS, emptySet()) ?: emptySet()
+
+    fun setHiddenServers(context: Context, ids: Set<String>) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit { putStringSet(KEY_HIDDEN_SERVERS, ids) }
+    }
+
+    fun toggleHiddenServer(context: Context, guildId: String): Boolean {
+        val current = getHiddenServers(context).toMutableSet()
+        val hidden = if (current.contains(guildId)) { current.remove(guildId); false }
+                     else { current.add(guildId); true }
+        setHiddenServers(context, current)
+        return hidden
+    }
+
+    // ── Hidden DMs ────────────────────────────────────────────────────────────
+    private const val KEY_HIDDEN_DMS = "hidden_dms"
+
+    fun getHiddenDms(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_HIDDEN_DMS, emptySet()) ?: emptySet()
+
+    fun setHiddenDms(context: Context, ids: Set<String>) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit { putStringSet(KEY_HIDDEN_DMS, ids) }
+    }
+
+    fun toggleHiddenDm(context: Context, channelId: String): Boolean {
+        val current = getHiddenDms(context).toMutableSet()
+        val hidden = if (current.contains(channelId)) { current.remove(channelId); false }
+                     else { current.add(channelId); true }
+        setHiddenDms(context, current)
+        return hidden
+    }
+
+    // ── Cache management ──────────────────────────────────────────────────────
+
+    /** Wipes all cached Discord data (guilds, channels, DMs, emojis, stickers). */
+    fun clearDiscordCache(context: Context) {
+        val cache = context.getSharedPreferences("discord_wear_cache", Context.MODE_PRIVATE)
+        cache.edit { clear() }
+    }
+
+    /** Full logout: clear token + all cached data. */
+    fun clearAll(context: Context) {
+        clearToken(context)
+        clearDiscordCache(context)
+    }
 }
