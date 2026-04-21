@@ -173,7 +173,7 @@ fun ChatScreen(
                     )
                 }
                 item {
-                    OutlinedTextField(
+                    TextField(
                         value = editText,
                         onValueChange = { editText = it },
                         modifier = Modifier.fillMaxWidth(),
@@ -513,7 +513,7 @@ fun ChatScreen(
                     }
 
                 if (canSend) {
-                    OutlinedTextField(
+                    TextField(
                         value = inputText,
                         onValueChange = { newValue ->
                             inputText = newValue
