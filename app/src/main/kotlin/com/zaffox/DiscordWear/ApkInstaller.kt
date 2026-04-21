@@ -19,11 +19,6 @@ object ApkInstaller {
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    /**
-     * Downloads the APK from [url] into the app's external files dir and
-     * fires an Intent to install it (works on WearOS devices with a file manager
-     * that supports APK installation). Returns the saved [File] on success.
-     */
     suspend fun downloadAndInstall(context: Context, url: String): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val dir  = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -37,7 +32,6 @@ object ApkInstaller {
                 file.writeBytes(bytes)
             }
 
-            // Fire install intent via FileProvider so Android 7+ can open it
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -53,14 +47,11 @@ object ApkInstaller {
         }
     }
 
-    /** Opens the release HTML page in the phone's browser via RemoteIntent. */
     fun openInPhoneBrowser(context: Context, url: String) {
         runCatching {
-            // RemoteIntent routes the browser intent to the paired phone
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                 addCategory(Intent.CATEGORY_BROWSABLE)
             }
-            // Try RemoteIntent (Wear API) first, fall back to direct startActivity
             val remoteIntentClass = runCatching {
                 Class.forName("com.google.android.wearable.intent.RemoteIntent")
             }.getOrNull()
