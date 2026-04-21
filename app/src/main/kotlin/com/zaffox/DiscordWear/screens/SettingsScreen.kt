@@ -9,7 +9,9 @@ import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
+import com.zaffox.discordwear.ApkInstaller
 import com.zaffox.discordwear.SetupPreferences
+import com.zaffox.discordwear.UpdateChecker
 import com.zaffox.discordwear.discordApp
 import kotlinx.coroutines.launch
 
@@ -39,6 +41,7 @@ fun SettingsScreen(
     }
 
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    val updateState by UpdateChecker.state.collectAsState()
 
     if (showLogoutConfirm) {
         ScreenScaffold(scrollState = rememberScalingLazyListState()) {
@@ -151,6 +154,7 @@ fun SettingsScreen(
                         SetupPreferences.setCompactMode(context, it)
                     },
                     label = { 
+                    label = { Text("Compact messages", style = MaterialTheme.typography.bodySmall) }
                         Text("Compact messages", style = MaterialTheme.typography.bodySmall) 
                          Text(
                             "Hides profile pictures",
@@ -201,6 +205,7 @@ fun SettingsScreen(
                         SetupPreferences.setHideInaccessibleChannels(context, it)
                     },
                     label = { 
+                    label = { Text("Hide locked channels", style = MaterialTheme.typography.bodySmall) }
                         Text("Hide locked channels", style = MaterialTheme.typography.bodySmall) 
                          Text(
                             "Not working with user API",
@@ -230,7 +235,114 @@ fun SettingsScreen(
 
             item {
                 Text(
-                    "DiscordWear V1.0 Alpha", //add to /res/values/strings
+                    "UPDATE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp)
+                )
+            }
+
+            item {
+                val statusText = when (val s = updateState) {
+                    is UpdateChecker.UpdateState.Idle -> "v${UpdateChecker.CURRENT_VERSION}"
+                    is UpdateChecker.UpdateState.Checking -> "Checking…"
+                    is UpdateChecker.UpdateState.UpToDate -> "v${UpdateChecker.CURRENT_VERSION} — up to date"
+                    is UpdateChecker.UpdateState.UpdateAvailable -> "v${s.release.tagName} available!"
+                    is UpdateChecker.UpdateState.Error -> "Check failed: ${s.message}"
+                }
+                val statusColor = when (updateState) {
+                    is UpdateChecker.UpdateState.UpdateAvailable -> MaterialTheme.colorScheme.primary
+                    is UpdateChecker.UpdateState.Error -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = statusColor,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            item {
+                Button(
+                    onClick = { UpdateChecker.checkNow(context) },
+                    modifier = Modifier.fillMaxWidth().height(36.dp),
+                    enabled = updateState !is UpdateChecker.UpdateState.Checking,
+                    colors = ButtonDefaults.filledTonalButtonColors()
+                ) {
+                    Text(
+                        if (updateState is UpdateChecker.UpdateState.Checking) "Checking…" else "Check for updates",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            if (updateState is UpdateChecker.UpdateState.UpdateAvailable) {
+                val release = (updateState as UpdateChecker.UpdateState.UpdateAvailable).release
+                var downloading by remember { mutableStateOf(false) }
+                var downloadError by remember { mutableStateOf("") }
+
+                if (release.apkUrl != null) {
+                    item {
+                        Button(
+                            onClick = {
+                                if (!downloading) {
+                                    downloading = true
+                                    downloadError = ""
+                                    scope.launch {
+                                        ApkInstaller.downloadAndInstall(context, release.apkUrl)
+                                            .onFailure { downloadError = it.message ?: "Download failed" }
+                                        downloading = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().height(36.dp),
+                            enabled = !downloading,
+                            colors = ButtonDefaults.buttonColors()
+                        ) {
+                            Text(
+                                if (downloading) "Downloading…" else "Download & Install APK",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    if (downloadError.isNotEmpty()) {
+                        item {
+                            Text(
+                                downloadError,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Button(
+                        onClick = { ApkInstaller.openInPhoneBrowser(context, release.htmlUrl) },
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors()
+                    ) {
+                        Text("Open release on phone", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+
+                item {
+                    Text(
+                        "Open on phone to download, then sideload via ADB:\nadb install DiscordWear.apk",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                    )
+                }
+            }
+
+            item {
+                Text(
+                    "DiscordWear v${UpdateChecker.CURRENT_VERSION}",
                     style = MaterialTheme.typography.labelSmall,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
