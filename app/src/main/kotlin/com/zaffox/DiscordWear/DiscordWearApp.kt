@@ -7,11 +7,6 @@ class DiscordWearApp : Application() {
      var repository: DiscordRepository? = null
         private set
 
-    override fun onCreate() {
-        super.onCreate()
-        UpdateChecker.start(this)
-    }
-
     fun initRepository(token: String) {
         repository?.disconnect()
         val repo = DiscordRepository(token, context = this)
