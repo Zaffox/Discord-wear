@@ -230,7 +230,7 @@ fun SettingsScreen(
 
             item {
                 Text(
-                    "DiscordWear V1.0 Alpha", //add to /res/values/strings
+                    "DiscordWear V1.0 beta", //add to /res/values/strings
                     style = MaterialTheme.typography.labelSmall,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
