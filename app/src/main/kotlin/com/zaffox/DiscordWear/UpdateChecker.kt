@@ -26,22 +26,17 @@ data class ReleaseInfo(
 )
 
 object UpdateChecker {
-
-    // Point at the GitHub Releases API — update owner/repo if the repo is forked/renamed
     private const val GITHUB_OWNER = "zaffox"
     private const val GITHUB_REPO  = "Discord-WearOS-Alpha"
     private const val API_URL      = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
-
-    // Current bundled version — must match versionName in build.gradle
     const val CURRENT_VERSION = "1.0"
-
     private const val PREFS_NAME        = "update_checker"
     private const val KEY_LAST_CHECK    = "last_check_ms"
     private const val KEY_LATEST_TAG    = "latest_tag"
     private const val KEY_LATEST_APK    = "latest_apk_url"
     private const val KEY_LATEST_HTML   = "latest_html_url"
     private const val KEY_LATEST_NAME   = "latest_release_name"
-    private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L  // 24 hours
+    private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
 
     private val scope  = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val http   = OkHttpClient.Builder()
@@ -63,10 +58,9 @@ object UpdateChecker {
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Call once from Application.onCreate — runs a 24-hour polling loop. */
+    
     fun start(context: Context) {
         scope.launch {
-            // Restore cached state so Settings shows info immediately on launch
             restoreCachedState(context)
 
             val appContext = context.applicationContext
@@ -83,7 +77,6 @@ object UpdateChecker {
         }
     }
 
-    /** Force an immediate check (called from Settings "Check Now" button). */
     fun checkNow(context: Context) {
         scope.launch { check(context.applicationContext) }
     }
@@ -127,7 +120,6 @@ object UpdateChecker {
             val releaseBody = json.optString("body", "")
             val htmlUrl   = json.getString("html_url")
 
-            // Find the first .apk asset
             val assets = json.optJSONArray("assets") ?: JSONArray()
             var apkUrl: String? = null
             for (i in 0 until assets.length()) {
@@ -138,7 +130,6 @@ object UpdateChecker {
                 }
             }
 
-            // Persist result
             prefs(context).edit()
                 .putLong(KEY_LAST_CHECK, System.currentTimeMillis())
                 .putString(KEY_LATEST_TAG, tag)
@@ -157,11 +148,6 @@ object UpdateChecker {
         }
     }
 
-    /**
-     * Returns true if [candidate] is strictly newer than [current].
-     * Compares dot-separated numeric segments (e.g. "1.2.0" > "1.1.9").
-     * Falls back to string inequality for non-numeric tags.
-     */
     private fun isNewer(candidate: String, current: String): Boolean {
         val cParts = candidate.split(".").mapNotNull { it.toIntOrNull() }
         val oParts = current.split(".").mapNotNull { it.toIntOrNull() }
