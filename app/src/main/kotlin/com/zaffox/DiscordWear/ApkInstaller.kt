@@ -19,7 +19,16 @@ object ApkInstaller {
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    suspend fun downloadAndInstall(context: Context, url: String): Result<File> = withContext(Dispatchers.IO) {
+    /**
+     * Downloads the APK from [url], streaming it in chunks and calling
+     * [onProgress] with a 0f–1f fraction as bytes arrive.
+     * On completion fires an install Intent via FileProvider.
+     */
+    suspend fun downloadAndInstall(
+        context: Context,
+        url: String,
+        onProgress: (Float) -> Unit = {}
+    ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val dir  = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: context.filesDir
@@ -28,10 +37,29 @@ object ApkInstaller {
             val request = Request.Builder().url(url).build()
             http.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                val bytes = resp.body?.bytes() ?: error("Empty body")
-                file.writeBytes(bytes)
+                val body          = resp.body ?: error("Empty body")
+                val contentLength = body.contentLength()   // -1 if unknown
+
+                body.source().use { source ->
+                    file.outputStream().use { out ->
+                        val buffer    = ByteArray(8 * 1024)
+                        var totalRead = 0L
+                        while (true) {
+                            val read = source.read(buffer)
+                            if (read == -1) break
+                            out.write(buffer, 0, read)
+                            totalRead += read
+                            if (contentLength > 0) {
+                                onProgress(totalRead.toFloat() / contentLength.toFloat())
+                            }
+                        }
+                    }
+                }
             }
 
+            onProgress(1f)
+
+            // Fire install intent via FileProvider so Android 7+ can open it
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -47,6 +75,7 @@ object ApkInstaller {
         }
     }
 
+    /** Opens the release HTML page in the phone's browser via RemoteIntent. */
     fun openInPhoneBrowser(context: Context, url: String) {
         runCatching {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
