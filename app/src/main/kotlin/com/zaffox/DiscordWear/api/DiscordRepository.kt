@@ -52,10 +52,24 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     }.let { MutableStateFlow(0) }
     private val _totalMentions = kotlinx.coroutines.flow.MutableStateFlow(0)
     val totalMentions: StateFlow<Int> = _totalMentions.asStateFlow()
-    private val emojiCache = mutableMapOf<String, List<GuildEmoji>>()
-    private val stickerCache = mutableMapOf<String, List<StickerItem>>()
+    private val emojiCache = object : LinkedHashMap<String, List<GuildEmoji>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, List<GuildEmoji>>?) =
+            size > 10 // Keep max 10 guilds' emojis in memory
+    }
+    private val stickerCache = object : LinkedHashMap<String, List<StickerItem>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, List<StickerItem>>?) =
+            size > 10 // Keep max 10 guilds' stickers in memory
+    }
     private val channelNameCache = mutableMapOf<String, String>()
     private val channelGuildCache = mutableMapOf<String, String>()
+    private val memberRolesCache = object : LinkedHashMap<String, List<String>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, List<String>>?) =
+            size > 100 // Max 100 user role lookups cached
+    }
+    private val guildRolesCache = object : LinkedHashMap<String, List<GuildRole>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, List<GuildRole>>?) =
+            size > 20 // Max 20 guilds' roles cached
+    }
     private val typingJobs = mutableMapOf<String, Job>()
     private val lastSentAt = mutableMapOf<String, Long>()
 
@@ -186,26 +200,40 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         }
     }
 
+    /** Returns the highest-position coloured role for a user, or null if none. */
+    suspend fun getTopRoleForUser(guildId: String, userId: String): GuildRole? {
+        val cacheKey = "$guildId/$userId"
+        val roleIds = memberRolesCache.getOrPut(cacheKey) {
+            rest.getGuildMemberRoles(guildId, userId).getOrNull() ?: return null
+        }
+        val roles = guildRolesCache.getOrPut(guildId) {
+            rest.getGuildRoles(guildId).getOrNull() ?: return null
+        }
+        val roleMap = roles.associateBy { it.id }
+        // Highest-position role with a non-zero color wins — Discord's own rule
+        return roleIds
+            .mapNotNull { roleMap[it] }
+            .filter { it.color != 0 || it.unicodeEmoji != null || it.iconHash != null }
+            .maxByOrNull { it.position }
+    }
+
+    @Deprecated("Use getTopRoleForUser instead")
+    suspend fun getRoleColorForUser(guildId: String, userId: String): Int? =
+        getTopRoleForUser(guildId, userId)?.color
+
     suspend fun getGuildEmojis(guildId: String): List<GuildEmoji> {
         emojiCache[guildId]?.let { return it }
-        val loaded = loadCachedEmojis(guildId)
-        if (loaded.isNotEmpty()) { emojiCache[guildId] = loaded; return loaded }
         rest.getGuildEmojis(guildId).onSuccess { list ->
             emojiCache[guildId] = list
-            saveEmojis(guildId, list)
-            return list
         }
-        return emptyList()
+        return emojiCache[guildId] ?: emptyList()
     }
 
     suspend fun getGuildStickers(guildId: String): List<StickerItem> {
         stickerCache[guildId]?.let { return it }
-        val loaded = loadCachedStickers(guildId)
-        if (loaded.isNotEmpty()) { stickerCache[guildId] = loaded; return loaded }
         rest.getGuildStickers(guildId).onSuccess { list ->
             val displayable = list.filter { it.isDisplayable }
             stickerCache[guildId] = displayable
-            saveStickers(guildId, displayable)
             return displayable
         }
         return emptyList()
@@ -215,6 +243,14 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         val json = prefs?.getString("channels_$guildId", null) ?: return null
         val arr = JSONArray(json)
         val allChannels = Channel.listFromJson(arr)
+        
+        // Populate in-memory caches
+        allChannels.forEach { ch ->
+            channelCache[ch.id] = ch
+            channelNameCache[ch.id] = ch.displayName
+            channelGuildCache[ch.id] = guildId
+        }
+        
         val textChannels = allChannels.filter { it.isText }
         val categories = allChannels.filter { it.isCategory }.sortedBy { it.position }
         val byParent = textChannels.groupBy { it.parentId }
@@ -247,6 +283,17 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     }
 
     suspend fun loadMessages(channelId: String) {
+        // Fetch channel metadata if not cached
+        if (!channelCache.containsKey(channelId)) {
+            rest.getChannel(channelId).onSuccess { ch ->
+                channelCache[channelId] = ch
+                channelNameCache[channelId] = ch.displayName  // Use displayName for DMs
+                ch.guildId?.let { guildId ->
+                    channelGuildCache[channelId] = guildId
+                }
+            }
+        }
+        
         rest.getMessages(channelId).onSuccess { fetched ->
             val fetchedList = fetched.reversed() 
             fetchedList.forEach { userDisplayNames[it.author.id] = it.author.displayName }
@@ -515,30 +562,16 @@ class DiscordRepository(token: String, private val context: Context? = null) {
 
     private fun loadCachedDmChannels(): List<Channel> = runCatching {
         val json = prefs?.getString("dm_channels", null) ?: return emptyList()
-        Channel.listFromJson(JSONArray(json))
+        val channels = Channel.listFromJson(JSONArray(json))
+        // Populate in-memory cache
+        channels.forEach { ch ->
+            channelNameCache[ch.id] = ch.displayName
+            channelCache[ch.id] = ch
+        }
+        channels
     }.getOrElse { emptyList() }
 
     private fun saveDmChannels(list: List<Channel>) = runCatching {
         prefs?.edit()?.putString("dm_channels", JSONArray(list.map { it.toJson() }).toString())?.apply()
-    }
-
-    private fun loadCachedEmojis(guildId: String): List<GuildEmoji> = runCatching {
-        val json = prefs?.getString("emojis_$guildId", null) ?: return emptyList()
-        val arr = JSONArray(json)
-        (0 until arr.length()).map { GuildEmoji.fromJson(arr.getJSONObject(it)) }
-    }.getOrElse { emptyList() }
-
-    private fun saveEmojis(guildId: String, list: List<GuildEmoji>) = runCatching {
-        prefs?.edit()?.putString("emojis_$guildId", JSONArray(list.map { it.toJson() }).toString())?.apply()
-    }
-
-    private fun loadCachedStickers(guildId: String): List<StickerItem> = runCatching {
-        val json = prefs?.getString("stickers_$guildId", null) ?: return emptyList()
-        val arr = JSONArray(json)
-        (0 until arr.length()).map { StickerItem.fromJson(arr.getJSONObject(it)) }
-    }.getOrElse { emptyList() }
-
-    private fun saveStickers(guildId: String, list: List<StickerItem>) = runCatching {
-        prefs?.edit()?.putString("stickers_$guildId", JSONArray(list.map { it.toJson() }).toString())?.apply()
     }
 }
