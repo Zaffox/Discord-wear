@@ -62,9 +62,19 @@ class DiscordRestClient(private val token: String) {
         GuildMember.fromJson(JSONObject(get("/guilds/$guildId/members/@me")))
     }
 
+    suspend fun getGuildMemberRoles(guildId: String, userId: String): Result<List<String>> = runCatching {
+        val member = JSONObject(get("/guilds/$guildId/members/$userId"))
+        val arr = member.getJSONArray("roles")
+        (0 until arr.length()).map { arr.getString(it) }
+    }
+
     suspend fun getGuildRoles(guildId: String): Result<List<GuildRole>> = runCatching {
         val guild = JSONObject(get("/guilds/$guildId"))
         GuildRole.listFromJson(guild.getJSONArray("roles"))
+    }
+
+    suspend fun getChannel(channelId: String): Result<Channel> = runCatching {
+        Channel.fromJson(JSONObject(get("/channels/$channelId")))
     }
 
     suspend fun getGuildChannels(
