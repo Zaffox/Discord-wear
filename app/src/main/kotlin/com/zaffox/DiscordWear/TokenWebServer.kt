@@ -23,7 +23,7 @@ class TokenWebServer(
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
                 val iface = interfaces.nextElement()
-                if (!iface.isUp || iface.isLoopback) continue
+                if (!iface.isUp || iface.isLoopback || !iface.name.startsWith("wlan")) continue
                 val addrs = iface.inetAddresses
                 while (addrs.hasMoreElements()) {
                     val addr = addrs.nextElement()

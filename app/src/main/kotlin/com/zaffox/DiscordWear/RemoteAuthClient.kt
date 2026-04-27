@@ -48,9 +48,7 @@ class RemoteAuthClient(
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    // Per discord.food docs: OAEP with SHA-256 for both the hash AND MGF1
-    // padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None)
-    private val oaepSpec = OAEPParameterSpec(
+private val oaepSpec = OAEPParameterSpec(
         "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT
     )
 
@@ -101,7 +99,6 @@ class RemoteAuthClient(
                 log("← hello (heartbeat ${intervalMs}ms)")
                 log("Generating RSA-2048 keypair…")
                 generateKeyPair()
-                // Send SPKI DER base64 — confirmed by discord.food docs
                 val b64 = Base64.encodeToString(publicKeySpki, Base64.NO_WRAP)
                 log("Pubkey: ${b64.take(20)}… (${publicKeySpki!!.size}B SPKI)")
                 send(JSONObject().put("op", "init").put("encoded_public_key", b64))
@@ -111,10 +108,7 @@ class RemoteAuthClient(
             "nonce_proof" -> {
                 log("← nonce_proof, decrypting…")
                 val encryptedNonce = json.getString("encrypted_nonce")
-                // Decrypt with RSA-OAEP SHA-256/MGF1-SHA-256
                 val decryptedNonce = decryptBytes(Base64.decode(encryptedNonce, Base64.DEFAULT))
-                // Proof = base64url(decryptedNonce), NO hashing — per discord.food docs:
-                // nonce_proof = base64.urlsafe_b64encode(nonce).rstrip("=")
                 val proof = Base64.encodeToString(decryptedNonce, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
                 log("Nonce decrypted (${decryptedNonce.size}B), proof=${proof.take(16)}…")
                 send(JSONObject().put("op", "nonce_proof").put("nonce", proof))
@@ -123,14 +117,12 @@ class RemoteAuthClient(
             "pending_remote_init" -> {
                 val fingerprint = json.getString("fingerprint")
                 log("← pending_remote_init!")
-                // Verify: fingerprint = base64url(SHA-256(SPKI))
                 val spki = publicKeySpki!!
                 val digest = MessageDigest.getInstance("SHA-256").digest(spki)
                 val computed = Base64.encodeToString(digest, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
                 log("Fingerprint match: ${fingerprint == computed}")
                 if (fingerprint != computed) {
                     log("Expected: $fingerprint / Got: $computed")
-                    // Don't abort — Discord accepted us, fingerprint check is optional safety
                 }
                 setState(RemoteAuthState.WaitingForScan(fingerprint))
             }
@@ -166,44 +158,6 @@ class RemoteAuthClient(
         return cipher.doFinal(cipherBytes)
     }
 
-    // Generated once per client instance, like a real Discord client would
-    private val clientLaunchId = java.util.UUID.randomUUID().toString()
-    private val clientHeartbeatSessionId = java.util.UUID.randomUUID().toString()
-
-    // launch_signature: random UUID with mod-detection bits zeroed, per discord.food docs
-    private val launchSignature: String by lazy {
-        // Bits to zero out — split into two hex longs to avoid binary literal overflow
-        val modBitsHi = 0x0080010010410020L
-        val modBitsLo = 0x0204000100001000L
-        val modBits   = modBitsHi or modBitsLo
-        val uuid = java.util.UUID.randomUUID()
-        java.util.UUID(uuid.mostSignificantBits and modBits.inv(), uuid.leastSignificantBits and modBits.inv()).toString()
-    }
-
-    // Matches what Discord's web client sends — required to avoid CAPTCHA on ticket exchange
-    private val superProperties: String by lazy {
-        val json = JSONObject()
-            .put("os", "Windows")
-            .put("browser", "Chrome")
-            .put("device", "")
-            .put("system_locale", "en-US")
-            .put("browser_user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
-            .put("browser_version", "136.0.0.0")
-            .put("os_version", "10")
-            .put("referrer", "")
-            .put("referring_domain", "")
-            .put("referrer_current", "")
-            .put("referring_domain_current", "")
-            .put("release_channel", "stable")
-            .put("client_build_number", 396858)
-            .put("client_event_source", JSONObject.NULL)
-            .put("has_client_mods", false)
-            .put("client_launch_id", clientLaunchId)
-            .put("launch_signature", launchSignature)
-            .put("client_heartbeat_session_id", clientHeartbeatSessionId)
-        Base64.encodeToString(json.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-    }
-
     private suspend fun exchangeTicketForToken(ticket: String) {
         try {
             val body = JSONObject().put("ticket", ticket).toString()
@@ -212,11 +166,6 @@ class RemoteAuthClient(
                 .url("https://discord.com/api/v9/users/@me/remote-auth/login")
                 .post(body)
                 .header("Content-Type", "application/json")
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
-                .header("X-Super-Properties", superProperties)
-                .header("X-Discord-Locale", "en-US")
-                .header("Origin", "https://discord.com")
-                .header("Referer", "https://discord.com/login")
                 .build()
             val response = withContext(Dispatchers.IO) { http.newCall(request).execute() }
             val responseBody = response.body?.string() ?: throw Exception("Empty response")
