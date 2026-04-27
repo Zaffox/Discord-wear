@@ -58,14 +58,17 @@ fun ServerChannels(
 
     LaunchedEffect(guildId) {
         scope.launch {
-            if (!hideInaccessible) {
-                val cached = repo?.getCachedChannels(guildId, filterInaccessible = false)
-                if (!cached.isNullOrEmpty()) {
-                    groups = cached
-                    loading = false
-                    repo?.cacheChannelNames(cached)
-                }
+            // Check for cached channels first
+            val cached = repo?.getCachedChannels(guildId, filterInaccessible = hideInaccessible)
+            
+            if (!cached.isNullOrEmpty()) {
+                groups = cached
+                loading = false
+                repo?.cacheChannelNames(cached)
+                return@launch  // Already have cached data, skip network call
             }
+            
+            // No cache or cache is empty — fetch from network
             repo?.rest?.getGuildChannels(guildId, filterInaccessible = hideInaccessible)
                 ?.onSuccess {
                     groups = it

@@ -48,6 +48,7 @@ import com.zaffox.discordwear.SetupPreferences
 import com.zaffox.discordwear.R
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -85,6 +86,21 @@ fun ChatScreen(
     var replyingTo by remember { mutableStateOf<DiscordMessage?>(null) }
     var selectedMsg by remember { mutableStateOf<DiscordMessage?>(null) }
     var reactingToMsg by remember { mutableStateOf<DiscordMessage?>(null) }
+    val roleColorCache = remember { mutableStateMapOf<String, GuildRole?>() }
+    val channelNames = remember(messages.size, loading) { repo.getChannelNames() }
+
+    // Pre-load role data for all visible authors once messages load (guild channels only)
+    LaunchedEffect(messages, guildId, loading) {
+        if (!loading && guildId != null) {
+            messages
+                .map { it.author.id }
+                .distinct()
+                .filterNot { roleColorCache.containsKey(it) }
+                .forEach { userId ->
+                    roleColorCache[userId] = repo?.getTopRoleForUser(guildId, userId)
+                }
+        }
+    }
     val currentUser by repo.currentUser.collectAsState()
     val myId = currentUser?.id ?: currentUserId
     val hasNitro = currentUser?.hasNitro ?: false
@@ -440,9 +456,11 @@ fun ChatScreen(
                         isOwn = msg.author.id == myId,
                         isContinuation = isContinuation,
                         imageLoader = imageLoader,
-                        channelNames = repo.getChannelNames(),
+                        channelNames = channelNames,
                         compactMode = compactMode,
                         spoilerRevealOnTap = spoilerRevealOnTap,
+                        guildId = guildId,
+                        roleColorCache = roleColorCache,
                         onReact = { emoji ->
                             scope.launch { repo.toggleReaction(channelId, msg.id, emoji) }
                         },
@@ -694,6 +712,7 @@ private fun MessageOptionsDialog(
     onReact: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    BackHandler(onBack = onDismiss)
     val listState = rememberScalingLazyListState()
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -784,15 +803,26 @@ private fun MessageBubble(
     channelNames: Map<String, String> = emptyMap(),
     compactMode: Boolean = false,
     spoilerRevealOnTap: Boolean = true,
+    guildId: String? = null,
+    roleColorCache: SnapshotStateMap<String, GuildRole?> = mutableStateMapOf(),
     onReact: (ReactionEmoji) -> Unit,
     onSwipeLeft: () -> Unit,
     onLongPress: () -> Unit
 ) {
     val context = LocalContext.current
+    val repo = context.discordApp.repository
 
     val userNames = remember(msg.mentionedUsers) {
         msg.mentionedUsers.associate { it.id to it.displayName }
     }
+
+    // Role data is pre-loaded in ChatScreen for all visible authors
+    val topRole = if (guildId != null) roleColorCache[msg.author.id] else null
+    val rawRoleColor = topRole?.color
+    val authorNameColor = if (rawRoleColor != null && rawRoleColor != 0)
+        Color(0xFF000000.toInt() or rawRoleColor)
+    else
+        MaterialTheme.colorScheme.onSurfaceVariant
     var offsetX by remember { mutableStateOf(0f) }
 
     Row(
@@ -815,14 +845,26 @@ private fun MessageBubble(
                     while (true) {
                         val down = awaitPointerEvent()
                         if (down.changes.any { it.pressed }) {
+                            val startPos = down.changes.first().position
                             val timeout = 500L
                             val endTime = System.currentTimeMillis() + timeout
                             var lifted = false
+                            var moved = false
                             while (System.currentTimeMillis() < endTime) {
                                 val ev = awaitPointerEvent()
-                                if (ev.changes.all { !it.pressed }) { lifted = true; break }
+                                if (ev.changes.all { !it.pressed }) { 
+                                    lifted = true
+                                    break 
+                                }
+                                // Check if pointer moved more than 10dp — if so, it's a scroll/drag
+                                val currentPos = ev.changes.first().position
+                                val distance = (currentPos - startPos).getDistance()
+                                if (distance > 10f * density) {
+                                    moved = true
+                                    break
+                                }
                             }
-                            if (!lifted) {
+                            if (!lifted && !moved) {
                                 onLongPress()
                                 val ev = awaitPointerEvent()
                                 ev.changes.forEach { it.consume() }
@@ -878,8 +920,32 @@ private fun MessageBubble(
                     Text(
                         text = msg.author.displayName,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = authorNameColor
                     )
+                    // Role icon: show only once loaded, unicode emoji takes priority over custom image
+                    if (topRole != null) {
+                        when {
+                            !topRole.unicodeEmoji.isNullOrEmpty() -> {
+                                Text(
+                                    text = topRole.unicodeEmoji,
+                                    fontSize = 10.sp
+                                )
+                            }
+                            !topRole.iconHash.isNullOrEmpty() -> {
+                                SubcomposeAsyncImage(
+                                    model = ImageRequest.Builder(LocalContext.current)
+                                        .data(topRole.iconUrl())
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = null,
+                                    imageLoader = imageLoader,
+                                    modifier = Modifier.size(12.dp),
+                                    loading = { /* Hide while loading */ },
+                                    error = { /* Hide on error */ }
+                                )
+                            }
+                        }
+                    }
                     if (timeLabel.isNotEmpty()) {
                         Text(
                             text = timeLabel,
