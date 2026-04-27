@@ -188,12 +188,25 @@ data class GuildMember(
 
 data class GuildRole(
     val id: String,
-    val permissions: Long
+    val name: String,
+    val color: Int,       
+    val position: Int,
+    val permissions: Long,
+    val unicodeEmoji: String? = null,   
+    val iconHash: String? = null        
 ) {
+    fun iconUrl(size: Int = 16): String? =
+        iconHash?.let { "https://cdn.discordapp.com/role-icons/$id/$it.png?size=$size" }
+
     companion object {
         fun fromJson(o: JSONObject) = GuildRole(
             id = o.getString("id"),
-            permissions = o.getString("permissions").toLongOrNull() ?: 0L
+            name = o.optString("name", ""),
+            color = o.optInt("color", 0),
+            position = o.optInt("position", 0),
+            permissions = o.getString("permissions").toLongOrNull() ?: 0L,
+            unicodeEmoji = o.optString("unicode_emoji").takeIf { it.isNotEmpty() && it != "null" },
+            iconHash = o.optString("icon").takeIf { it.isNotEmpty() && it != "null" }
         )
         fun listFromJson(arr: JSONArray): List<GuildRole> =
             (0 until arr.length()).map { fromJson(arr.getJSONObject(it)) }
