@@ -16,6 +16,30 @@ import javax.crypto.Cipher
 import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
 
+private const val DISCORD_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+// Minimal x-super-properties — base64 of a JSON object matching a web client
+private val SUPER_PROPERTIES: String by lazy {
+    val json = JSONObject()
+        .put("os", "Windows")
+        .put("browser", "Chrome")
+        .put("device", "")
+        .put("system_locale", "en-US")
+        .put("browser_user_agent", DISCORD_UA)
+        .put("browser_version", "124.0.0.0")
+        .put("os_version", "10")
+        .put("referrer", "")
+        .put("referring_domain", "")
+        .put("referrer_current", "")
+        .put("referring_domain_current", "")
+        .put("release_channel", "stable")
+        .put("client_build_number", 9999)
+        .put("client_event_source", JSONObject.NULL)
+        .toString()
+    Base64.encodeToString(json.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+}
+
 sealed class RemoteAuthState {
     object Connecting : RemoteAuthState()
     data class WaitingForScan(val fingerprint: String) : RemoteAuthState()
@@ -68,6 +92,7 @@ private val oaepSpec = OAEPParameterSpec(
         val request = Request.Builder()
             .url("wss://remote-auth-gateway.discord.gg/?v=2")
             .header("Origin", "https://discord.com")
+            .header("User-Agent", DISCORD_UA)
             .build()
 
         ws = http.newWebSocket(request, object : WebSocketListener() {
@@ -166,6 +191,10 @@ private val oaepSpec = OAEPParameterSpec(
                 .url("https://discord.com/api/v9/users/@me/remote-auth/login")
                 .post(body)
                 .header("Content-Type", "application/json")
+                .header("User-Agent", DISCORD_UA)
+                .header("X-Super-Properties", SUPER_PROPERTIES)
+                .header("Origin", "https://discord.com")
+                .header("Referer", "https://discord.com/login")
                 .build()
             val response = withContext(Dispatchers.IO) { http.newCall(request).execute() }
             val responseBody = response.body?.string() ?: throw Exception("Empty response")
