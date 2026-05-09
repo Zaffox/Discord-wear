@@ -110,7 +110,7 @@ fun UserProfileScreen(
                 }
             }
 
-l            item {
+            item {
                 val u = user
                 if (loading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
