@@ -208,6 +208,75 @@ class DiscordRestClient(private val token: String) {
         DiscordMessage.fromJson(JSONObject(post("/channels/$channelId/messages", body)))
     }
 
+    suspend fun sendFileAttachment(
+        channelId: String,
+        fileBytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        caption: String = ""
+    ): Result<DiscordMessage> = runCatching {
+        withContext(Dispatchers.IO) {
+            val payloadJson = JSONObject()
+                .put("content", caption)
+                .put("attachments", org.json.JSONArray().put(
+                    JSONObject().put("id", 0).put("filename", filename)
+                ))
+                .toString()
+
+            val multipart = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("payload_json", null,
+                    payloadJson.toRequestBody("application/json".toMediaType()))
+                .addFormDataPart("files[0]", filename,
+                    fileBytes.toRequestBody(mimeType.toMediaType()))
+                .build()
+
+            val request = buildRequest("/channels/$channelId/messages").post(multipart).build()
+            val responseText = http.newCall(request).execute().use { resp ->
+                val text = resp.body?.string() ?: throw IOException("Empty response")
+                if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: $text")
+                text
+            }
+            DiscordMessage.fromJson(JSONObject(responseText))
+        }
+    }
+
+    suspend fun sendVoiceMessage(
+        channelId: String,
+        audioBytes: ByteArray,
+        durationSecs: Double,
+        waveform: String = ""
+    ): Result<DiscordMessage> = runCatching {
+        withContext(Dispatchers.IO) {
+            val payloadJson = JSONObject()
+                .put("flags", 8192) 
+                .put("attachments", org.json.JSONArray().put(
+                    JSONObject()
+                        .put("id", 0)
+                        .put("filename", "voice-message.ogg")
+                        .put("duration_secs", durationSecs)
+                        .put("waveform", waveform)
+                ))
+                .toString()
+
+            val multipart = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("payload_json", null,
+                    payloadJson.toRequestBody("application/json".toMediaType()))
+                .addFormDataPart("files[0]", "voice-message.ogg",
+                    audioBytes.toRequestBody("audio/ogg".toMediaType()))
+                .build()
+
+            val request = buildRequest("/channels/$channelId/messages").post(multipart).build()
+            val responseText = http.newCall(request).execute().use { resp ->
+                val text = resp.body?.string() ?: throw IOException("Empty response")
+                if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: $text")
+                text
+            }
+            DiscordMessage.fromJson(JSONObject(responseText))
+        }
+    }
+
     suspend fun addReaction(channelId: String, messageId: String, emojiKey: String): Result<Unit> = runCatching {
         val encoded = java.net.URLEncoder.encode(emojiKey, "UTF-8")
         execute(buildRequest("/channels/$channelId/messages/$messageId/reactions/$encoded/@me")
@@ -234,6 +303,17 @@ class DiscordRestClient(private val token: String) {
     suspend fun logout(): Result<Unit> = runCatching {
         post("/auth/logout", JSONObject())
         Unit
+    }
+
+    suspend fun getUserProfile(userId: String): Result<DiscordUser> = runCatching {
+        val json = JSONObject(get("/users/$userId/profile"))
+        val userObj = json.optJSONObject("user") ?: json
+        DiscordUser.fromJson(userObj)
+    }
+
+    suspend fun createDmChannel(userId: String): Result<Channel> = runCatching {
+        val body = JSONObject().put("recipient_id", userId)
+        Channel.fromJson(JSONObject(post("/users/@me/channels", body)))
     }
 }
 

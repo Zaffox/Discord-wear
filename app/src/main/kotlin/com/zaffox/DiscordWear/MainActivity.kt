@@ -83,7 +83,26 @@ class MainActivity : ComponentActivity() {
                             ChatScreen(
                                 channelId = channelId,
                                 channelName = channelName,
-                                guildId = guildId
+                                guildId = guildId,
+                                onNavigateToProfile = { userId, user ->
+                                    val encodedName = java.net.URLEncoder.encode(user?.displayName ?: userId, "UTF-8")
+                                    navController.navigate("userprofile/$userId/$encodedName")
+                                }
+                            )
+                        }
+
+                        composable("userprofile/{userId}/{displayName}") { back ->
+                            val userId = back.arguments?.getString("userId") ?: return@composable
+                            val displayName = back.arguments?.getString("displayName")
+                                ?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: userId
+                            UserProfileScreen(
+                                userId = userId,
+                                onNavigateToChat = { chId, chName ->
+                                    navController.navigate("chatscreen/$chId/$chName/dm") {
+                                        popUpTo("userprofile/$userId/$displayName") { inclusive = true }
+                                    }
+                                },
+                                onBack = { navController.popBackStack() }
                             )
                         }
 

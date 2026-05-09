@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,6 +14,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +45,10 @@ import coil.decode.ImageDecoderDecoder
 import coil.request.ImageRequest
 import android.content.Context
 import android.media.MediaPlayer
+import android.media.MediaRecorder
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import com.zaffox.discordwear.api.*
 import com.zaffox.discordwear.discordApp
 import com.zaffox.discordwear.SetupPreferences
@@ -49,6 +56,7 @@ import com.zaffox.discordwear.R
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.snapshots.SnapshotStateMap
+import java.io.File
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -56,7 +64,8 @@ fun ChatScreen(
     channelId: String,
     channelName: String,
     guildId: String? = null,
-    currentUserId: String = ""
+    currentUserId: String = "",
+    onNavigateToProfile: ((userId: String, user: DiscordUser?) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val repo = context.discordApp.repository
@@ -163,6 +172,87 @@ fun ChatScreen(
     var editingMsg by remember { mutableStateOf<DiscordMessage?>(null) }
     var editText by remember { mutableStateOf("") }
 
+    var uploadError by remember { mutableStateOf("") }
+    var showPhotoPicker by remember { mutableStateOf(false) }
+    val imagePermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) showPhotoPicker = true
+        else uploadError = "Photo permission denied"
+    }
+
+    var isRecording by remember { mutableStateOf(false) }
+    var recordingSecs by remember { mutableStateOf(0) }
+    var voiceFile by remember { mutableStateOf<File?>(null) }
+    var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
+    val micPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) uploadError = "Microphone permission denied"
+    }
+
+    fun startRecording() {
+        val hasAudio = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!hasAudio) { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO); return }
+        try {
+            val f = File(context.cacheDir, "voice_${System.currentTimeMillis()}.ogg")
+            voiceFile = f
+            val mr = MediaRecorder(context)
+            mr.setAudioSource(MediaRecorder.AudioSource.MIC)
+            mr.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+            mr.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+            mr.setOutputFile(f.absolutePath)
+            mr.prepare()
+            mr.start()
+            recorder = mr
+            isRecording = true
+            recordingSecs = 0
+        } catch (e: Exception) {
+            uploadError = "Mic error: ${e.message}"
+            isRecording = false
+        }
+    }
+
+    fun stopAndSendRecording() {
+        val mr = recorder ?: return
+        val f = voiceFile ?: return
+        val dur = recordingSecs.toDouble()
+        try {
+            mr.stop()
+            mr.release()
+        } catch (_: Exception) {}
+        recorder = null
+        isRecording = false
+        scope.launch {
+            runCatching {
+                val bytes = f.readBytes()
+                f.delete()
+                repo.sendVoiceMessage(channelId, bytes, dur)
+                    .onFailure { uploadError = "Voice send failed: ${it.message}" }
+            }.onFailure { uploadError = "Error: ${it.message}" }
+        }
+    }
+
+    fun cancelRecording() {
+        val mr = recorder ?: return
+        try { mr.stop(); mr.release() } catch (_: Exception) {}
+        recorder = null
+        isRecording = false
+        voiceFile?.delete()
+        voiceFile = null
+    }
+
+    LaunchedEffect(isRecording) {
+        if (isRecording) {
+            while (isRecording) {
+                delay(1_000)
+                recordingSecs++
+                if (recordingSecs >= 120) { stopAndSendRecording(); break }
+            }
+        }
+    }
+
     fun openEdit(msg: DiscordMessage) {
         editingMsg = msg
         editText = msg.content
@@ -175,6 +265,38 @@ fun ChatScreen(
     BackHandler(enabled = editingMsg != null) {
         editingMsg = null
         editText = ""
+    }
+    BackHandler(enabled = isRecording) {
+        cancelRecording()
+    }
+    BackHandler(enabled = showPhotoPicker) {
+        showPhotoPicker = false
+    }
+
+    if (showPhotoPicker) {
+        PhotoPickerScreen(
+            imageLoader = imageLoader,
+            onImageSelected = { uri, mime ->
+                showPhotoPicker = false
+                scope.launch {
+                    runCatching {
+                        val cr = context.contentResolver
+                        val ext = when {
+                            mime.contains("png") -> "png"
+                            mime.contains("gif") -> "gif"
+                            mime.contains("webp") -> "webp"
+                            else -> "jpg"
+                        }
+                        val bytes = cr.openInputStream(uri)?.readBytes()
+                            ?: throw Exception("Cannot read image")
+                        repo.sendFileAttachment(channelId, bytes, "image.$ext", mime)
+                            .onFailure { uploadError = "Upload failed: ${it.message}" }
+                    }.onFailure { uploadError = "Error: ${it.message}" }
+                }
+            },
+            onDismiss = { showPhotoPicker = false }
+        )
+        return
     }
 
     val msgBeingEdited = editingMsg
@@ -350,8 +472,8 @@ fun ChatScreen(
     val isAtBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            info.totalItemsCount == 0 || lastVisible >= info.totalItemsCount - 1
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 5
+            info.totalItemsCount == 5 || lastVisible >= info.totalItemsCount - 6
         }
     }
 
@@ -469,6 +591,9 @@ fun ChatScreen(
                         },
                         onLongPress = {
                             selectedMsg = msg
+                        },
+                        onAvatarClick = { userId ->
+                            onNavigateToProfile?.invoke(userId, msg.author.takeIf { it.id == userId })
                         }
                     )
                 }
@@ -482,9 +607,9 @@ fun ChatScreen(
             }
 
             // this BS not worky :(
-            val currentTypingUsers = typingMap[channelId].orEmpty().filter { it != myId }
-            if (currentTypingUsers.isNotEmpty()) {
-                item(key = "typing_indicator") {
+          //  val currentTypingUsers = typingMap[channelId].orEmpty().filter { it != myId }
+            //if (currentTypingUsers.isNotEmpty()) {
+              /*  item(key = "typing_indicator") {
                     val names = currentTypingUsers.mapNotNull { uid -> repo.getDisplayName(uid) }
                     val label = when {
                         names.isEmpty() -> "Someone is typing…"
@@ -499,7 +624,7 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
                     )
                 }
-            }
+            //}*/
 
             item(key = "text_input") {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -562,9 +687,10 @@ fun ChatScreen(
 
             item(key = "action_buttons") {
                 if (canSend) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    modifier = Modifier.fillMaxWidth().padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(space = 16.dp, alignment = Alignment.CenterHorizontally)
                 ) {
                     FilledIconButton(
                         onClick = {
@@ -625,7 +751,88 @@ fun ChatScreen(
                         )
                     }
                 }
+                
+                if (!isRecording) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(6.dp),
+                     horizontalArrangement = Arrangement.spacedBy(space = 16.dp, alignment = Alignment.CenterHorizontally)
+
+                    ) {
+                        FilledIconButton(
+                            onClick = {
+                                val perm = if (android.os.Build.VERSION.SDK_INT >= 33)
+                                    Manifest.permission.READ_MEDIA_IMAGES
+                                else
+                                    Manifest.permission.READ_EXTERNAL_STORAGE
+                                val hasPerm = ContextCompat.checkSelfPermission(context, perm) ==
+                                    PackageManager.PERMISSION_GRANTED
+                                if (hasPerm) {
+                                    showPhotoPicker = true
+                                } else {
+                                    imagePermLauncher.launch(perm)
+                                }
+                            },
+                            modifier = Modifier.height(40.dp).width(40.dp),
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.image),
+                                contentDescription = "Upload Photo"
+                            )
+                        }
+                        FilledIconButton(
+                            onClick = { startRecording() },
+                            modifier = Modifier.height(40.dp).width(40.dp),
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.mic),
+                                contentDescription = "Voice Message"
+                            )
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        val mins = recordingSecs / 60
+                        val secs = recordingSecs % 60
+                        Text(
+                            text = "%02d:%02d".format(mins, secs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            Button(
+                                onClick = { cancelRecording() },
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                colors = ButtonDefaults.outlinedButtonColors()
+                            ) { Text("Cancel", fontSize = 12.sp) }
+                            Spacer(Modifier.width(6.dp))
+                            Button(
+                                onClick = { stopAndSendRecording() },
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors()
+                            ) { Text("Send", fontSize = 11.sp) }
+                        }
+                    }
                 }
+                if (uploadError.isNotEmpty()) {
+                    Text(
+                        uploadError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.clickable { uploadError = "" }
+                    )
+                }
+                }
+            }
             }
         }
         }
@@ -807,7 +1014,8 @@ private fun MessageBubble(
     roleColorCache: SnapshotStateMap<String, GuildRole?> = mutableStateMapOf(),
     onReact: (ReactionEmoji) -> Unit,
     onSwipeLeft: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    onAvatarClick: (userId: String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val repo = context.discordApp.repository
@@ -880,7 +1088,8 @@ private fun MessageBubble(
             DiscordAvatarWithDecoration(
                 user = msg.author,
                 imageLoader = imageLoader,
-                size = 22.dp
+                size = 22.dp,
+                onClick = { onAvatarClick(msg.author.id) }
             )
             Spacer(Modifier.width(4.dp))
         } else if (!compactMode && !isOwn) {
@@ -1410,9 +1619,17 @@ private fun AudioAttachment(att: Attachment) {
 
 
 @Composable
-private fun DiscordAvatarWithDecoration(user: com.zaffox.discordwear.api.DiscordUser, imageLoader: ImageLoader, size: Dp) {
+private fun DiscordAvatarWithDecoration(user: com.zaffox.discordwear.api.DiscordUser, imageLoader: ImageLoader, size: Dp, onClick: () -> Unit = {}) {
     val decorUrl = user.avatarDecorationUrl()
-    Box(contentAlignment = Alignment.Center) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .pointerInput(onClick) {
+                detectTapGestures(
+                    onTap = { onClick() }
+                )
+            }
+    ) {
         DiscordAvatar(url = user.avatarUrl(32), displayName = user.displayName, imageLoader = imageLoader, size = size)
         if (decorUrl != null) {
             AsyncImage(

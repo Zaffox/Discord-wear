@@ -11,13 +11,20 @@ data class DiscordUser(
     val avatarHash: String?,
     val premiumType: Int = 0,
     val nameplateAsset: String? = null,
-    val avatarDecorationSkuId: String? = null
+    val avatarDecorationSkuId: String? = null,
+    val bannerHash: String? = null,
+    val bio: String? = null
 ) {
     val hasNitro: Boolean get() = premiumType > 0
     val displayName: String get() = globalName ?: username
     fun avatarUrl(size: Int = 64): String? =
         if (avatarHash != null)
             "https://cdn.discordapp.com/avatars/$id/$avatarHash.png?size=$size"
+        else null
+
+    fun bannerUrl(size: Int = 480): String? =
+        if (bannerHash != null)
+            "https://cdn.discordapp.com/banners/$id/$bannerHash.png?size=$size"
         else null
 
     fun nameplateUrl(): String? =
@@ -48,12 +55,20 @@ data class DiscordUser(
                   ?.optJSONObject("avatar_decoration")
                   ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" }
                 ?: o.optJSONObject("avatar_decoration_data")
-                    ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" }
+                    ?.optString("sku_id")?.takeIf { it.isNotEmpty() && it != "null" },
+            bannerHash = o.optString("banner").takeIf { it.isNotEmpty() && it != "null" },
+            bio = o.optString("bio").takeIf { it.isNotEmpty() && it != "null" }
         )
     }
 }
 
 enum class OnlineStatus { ONLINE, IDLE, DND, INVISIBLE, OFFLINE }
+
+data class UserProfile(
+    val user: DiscordUser,
+    val mutualGuilds: List<String> = emptyList(),
+    val dmChannelId: String? = null
+)
 
 data class ClientStatus(
     val desktop: OnlineStatus? = null,

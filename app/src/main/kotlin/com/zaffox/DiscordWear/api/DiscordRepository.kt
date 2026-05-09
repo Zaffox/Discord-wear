@@ -54,11 +54,11 @@ class DiscordRepository(token: String, private val context: Context? = null) {
     val totalMentions: StateFlow<Int> = _totalMentions.asStateFlow()
     private val emojiCache = object : LinkedHashMap<String, List<GuildEmoji>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: Map.Entry<String, List<GuildEmoji>>?) =
-            size > 10 // Keep max 10 guilds' emojis in memory
+            size > 10 // Keep max 10 guilds' emojis in cache
     }
     private val stickerCache = object : LinkedHashMap<String, List<StickerItem>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: Map.Entry<String, List<StickerItem>>?) =
-            size > 10 // Keep max 10 guilds' stickers in memory
+            size > 10 // Keep max 10 guilds' stickers in cache
     }
     private val channelNameCache = mutableMapOf<String, String>()
     private val channelGuildCache = mutableMapOf<String, String>()
@@ -143,8 +143,6 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         scope.launch { refreshCurrentUser() }
         scope.launch { refreshGuilds() }
         scope.launch { refreshDmChannels() }
-        // Pre-populate channel name/guild caches from all previously cached guild channel data
-        // so mention cards on HomeScreen show names instead of raw IDs on first load
         scope.launch {
             val cachedGuildIds = loadCachedGuilds().map { it.id }
             for (guildId in cachedGuildIds) {
@@ -337,6 +335,42 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         return result
     }
 
+    suspend fun sendFileAttachment(
+        channelId: String,
+        fileBytes: ByteArray,
+        filename: String,
+        mimeType: String,
+        caption: String = ""
+    ): Result<DiscordMessage> {
+        val result = rest.sendFileAttachment(channelId, fileBytes, filename, mimeType, caption)
+        result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
+            _messages.update { current ->
+                val list = current[channelId].orEmpty().toMutableList()
+                if (list.none { it.id == msg.id }) list.add(msg)
+                current + (channelId to list)
+            }
+        }
+        return result
+    }
+
+    suspend fun sendVoiceMessage(
+        channelId: String,
+        audioBytes: ByteArray,
+        durationSecs: Double
+    ): Result<DiscordMessage> {
+        val result = rest.sendVoiceMessage(channelId, audioBytes, durationSecs)
+        result.onSuccess { msg ->
+            lastSentAt[channelId] = System.currentTimeMillis()
+            _messages.update { current ->
+                val list = current[channelId].orEmpty().toMutableList()
+                if (list.none { it.id == msg.id }) list.add(msg)
+                current + (channelId to list)
+            }
+        }
+        return result
+    }
+
     suspend fun sendSticker(channelId: String, stickerId: String): Result<DiscordMessage> {
         val result = rest.sendSticker(channelId, stickerId)
         result.onSuccess { msg ->
@@ -386,6 +420,12 @@ class DiscordRepository(token: String, private val context: Context? = null) {
         }
         return result
     }
+
+    suspend fun fetchUserProfile(userId: String): Result<DiscordUser> =
+        rest.getUserProfile(userId)
+
+    suspend fun openDmWithUser(userId: String): Result<Channel> =
+        rest.createDmChannel(userId)
 
     suspend fun toggleReaction(channelId: String, messageId: String, emoji: ReactionEmoji) {
         val msg = _messages.value[channelId]?.firstOrNull { it.id == messageId } ?: return
